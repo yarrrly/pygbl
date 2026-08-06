@@ -29,7 +29,7 @@ from pygbl.elf import (
     read_bootloader_version,
     read_loadable_segments,
 )
-from pygbl.gbl import (
+from pygbl.gbl3 import (
     GBL_MAGIC,
     BootloaderVersion,
     GBLApplicationInfo,

@@ -7,7 +7,7 @@ import zlib
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
-from pygbl.gbl import (
+from pygbl.gbl3 import (
     BootloaderVersion,
     GBLApplicationInfo,
     GBLBootloader,

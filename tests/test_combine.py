@@ -12,7 +12,7 @@ from pygbl import (
     GBLMetadata,
     GBLType,
 )
-from pygbl.gbl import GBLBootloader
+from pygbl.gbl3 import GBLBootloader
 
 PRODUCT_ID = bytes(range(16))
 BOOTLOADER = GBLBootloader(

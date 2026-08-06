@@ -283,7 +283,17 @@ class GBLProgLZMA(_GBLAddressedData):
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class _GBLDeltaData(GBLTagBase):
-    """A delta DFU patch: the target image's CRC and size, then the patch itself."""
+    """A delta DFU patch: the target image's CRC and size, then the patch itself.
+
+    The patch stays opaque here because applying it needs the firmware already on the
+    device. It is Silicon Labs' own `ddfu` format: a `0D E1 7A` magic and a version
+    byte, then variable-length instructions that insert literal bytes from the patch,
+    copy a run from the old image, seek the source or output cursor, or copy a run and
+    add per-byte corrections to it. Both ends are gated, which is why these tags do not
+    appear in the wild: producing one needs Silicon Labs' unpublished `ddfu_diff`
+    library, and a bootloader only recognizes the tags when built with the
+    `bootloader_gbl_delta_dfu` component, which is not enabled by default.
+    """
 
     new_fw_crc: int
     new_fw_size: int

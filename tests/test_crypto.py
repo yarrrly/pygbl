@@ -27,7 +27,7 @@ from pygbl.crypto import (
     counter_block,
     generate_nonce,
 )
-from pygbl.gbl import serialize_tag
+from pygbl.gbl3 import serialize_tag
 
 KEY = bytes(range(AES_KEY_SIZE))
 NONCE = bytes(range(0x10, 0x1C))
