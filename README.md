@@ -1,6 +1,6 @@
 # pygbl
 
-A parser for the GBL and EBL firmware image formats used by the
+A parser for the EBL and GBL (v3 and v4) firmware image formats used by the
 [Silicon Labs Gecko bootloader](https://www.silabs.com/documents/public/user-guides/ug489-gecko-bootloader-user-guide-gsdk-4.pdf).
 
 Images are parsed into structured tags, and round-trip byte-for-byte: anything the
