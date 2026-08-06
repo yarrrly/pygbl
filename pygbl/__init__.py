@@ -49,6 +49,7 @@ from pygbl.gbl import (
 from pygbl.types import (
     VALID_CRC32,
     GBLError,
+    MissingDependencyError,
     ParseError,
     ValidationError,
     pad_to_multiple,
@@ -114,6 +115,7 @@ __all__ = [
     "GBLTagId",
     "GBLType",
     "GBLUnknownTag",
+    "MissingDependencyError",
     "ParseError",
     "ValidationError",
     "pad_to_multiple",
