@@ -4,43 +4,43 @@ import pytest
 
 from pygbl import (
     BootloaderVersion,
-    GBLApplicationInfo,
-    GBLApplicationType,
-    GBLEraseProg,
-    GBLHeader,
-    GBLImage,
-    GBLMetadata,
-    GBLType,
+    GBL3ApplicationInfo,
+    GBL3ApplicationType,
+    GBL3EraseProg,
+    GBL3Header,
+    GBL3Image,
+    GBL3Metadata,
+    GBL3Type,
 )
-from pygbl.gbl3 import GBLBootloader
+from pygbl.gbl3 import GBL3Bootloader
 
 PRODUCT_ID = bytes(range(16))
-BOOTLOADER = GBLBootloader(
+BOOTLOADER = GBL3Bootloader(
     version=BootloaderVersion(major=2, minor=4, customer=3),
     address=0x0,
     data=b"\xbb" * 64,
 )
-PROGRAM_DATA = GBLEraseProg(address=0x6000, data=b"\xaa" * 128)
-METADATA = GBLMetadata(metadata=b'{"fw_type": "zigbee_ncp"}')
+PROGRAM_DATA = GBL3EraseProg(address=0x6000, data=b"\xaa" * 128)
+METADATA = GBL3Metadata(metadata=b'{"fw_type": "zigbee_ncp"}')
 
 
-def header(type: GBLType = GBLType.NONE) -> GBLHeader:
-    return GBLHeader(version=3, type=type)
+def header(type: GBL3Type = GBL3Type.NONE) -> GBL3Header:
+    return GBL3Header(version=3, type=type)
 
 
-def app_info(app_type: GBLApplicationType) -> GBLApplicationInfo:
-    return GBLApplicationInfo(
+def app_info(app_type: GBL3ApplicationType) -> GBL3ApplicationInfo:
+    return GBL3ApplicationInfo(
         type=app_type, version=1, capabilities=0, product_id=PRODUCT_ID
     )
 
 
-def bootloader_image() -> GBLImage:
-    return GBLImage(tags=[header(), BOOTLOADER]).regenerate_crc()
+def bootloader_image() -> GBL3Image:
+    return GBL3Image(tags=[header(), BOOTLOADER]).regenerate_crc()
 
 
-def application_image() -> GBLImage:
-    return GBLImage(
-        tags=[header(), app_info(GBLApplicationType.ZIGBEE), PROGRAM_DATA, METADATA]
+def application_image() -> GBL3Image:
+    return GBL3Image(
+        tags=[header(), app_info(GBL3ApplicationType.ZIGBEE), PROGRAM_DATA, METADATA]
     ).regenerate_crc()
 
 
@@ -49,12 +49,12 @@ def test_combine() -> None:
 
     combined.validate()
 
-    assert combined.get_first_tag(GBLApplicationInfo).type == (
-        GBLApplicationType.ZIGBEE | GBLApplicationType.BOOTLOADER
+    assert combined.get_first_tag(GBL3ApplicationInfo).type == (
+        GBL3ApplicationType.ZIGBEE | GBL3ApplicationType.BOOTLOADER
     )
-    assert combined.get_first_tag(GBLBootloader) == BOOTLOADER
-    assert combined.get_first_tag(GBLEraseProg) == PROGRAM_DATA
-    assert combined.get_first_tag(GBLMetadata) == METADATA
+    assert combined.get_first_tag(GBL3Bootloader) == BOOTLOADER
+    assert combined.get_first_tag(GBL3EraseProg) == PROGRAM_DATA
+    assert combined.get_first_tag(GBL3Metadata) == METADATA
     assert combined.is_combined_bootloader_app()
 
 
@@ -74,7 +74,7 @@ def test_split_reparses() -> None:
     combined = application_image().combine_bootloader_app(bootloader_image())
 
     for image in combined.split_bootloader_app():
-        assert GBLImage.from_bytes(image.serialize()) == image
+        assert GBL3Image.from_bytes(image.serialize()) == image
 
 
 def test_application_only_image_is_not_split() -> None:
@@ -85,8 +85,8 @@ def test_application_only_image_is_not_split() -> None:
 
 
 def test_bootloader_only_image_is_not_split() -> None:
-    image = GBLImage(
-        tags=[header(), app_info(GBLApplicationType.BOOTLOADER), BOOTLOADER]
+    image = GBL3Image(
+        tags=[header(), app_info(GBL3ApplicationType.BOOTLOADER), BOOTLOADER]
     ).regenerate_crc()
 
     assert not image.is_combined_bootloader_app()
@@ -108,18 +108,21 @@ def test_no_bootloader_rejected() -> None:
 
 
 def test_mismatched_headers_rejected() -> None:
-    other = GBLImage(tags=[GBLHeader(version=2, type=GBLType.NONE), BOOTLOADER])
+    other = GBL3Image(tags=[GBL3Header(version=2, type=GBL3Type.NONE), BOOTLOADER])
 
     with pytest.raises(ValueError, match="GBL headers do not match"):
         application_image().combine_bootloader_app(other)
 
 
 def test_signed_images_cannot_be_combined() -> None:
-    signed_bootloader = GBLImage(
-        tags=[header(GBLType.SIGNATURE_ECDSA_P256), BOOTLOADER]
+    signed_bootloader = GBL3Image(
+        tags=[header(GBL3Type.SIGNATURE_ECDSA_P256), BOOTLOADER]
     ).regenerate_crc()
-    signed_app = GBLImage(
-        tags=[header(GBLType.SIGNATURE_ECDSA_P256), app_info(GBLApplicationType.ZIGBEE)]
+    signed_app = GBL3Image(
+        tags=[
+            header(GBL3Type.SIGNATURE_ECDSA_P256),
+            app_info(GBL3ApplicationType.ZIGBEE),
+        ]
     ).regenerate_crc()
 
     with pytest.raises(ValueError, match="Cannot combine signed or encrypted images"):
@@ -127,10 +130,10 @@ def test_signed_images_cannot_be_combined() -> None:
 
 
 def test_signed_combined_image_cannot_be_split() -> None:
-    image = GBLImage(
+    image = GBL3Image(
         tags=[
-            header(GBLType.SIGNATURE_ECDSA_P256),
-            app_info(GBLApplicationType.ZIGBEE | GBLApplicationType.BOOTLOADER),
+            header(GBL3Type.SIGNATURE_ECDSA_P256),
+            app_info(GBL3ApplicationType.ZIGBEE | GBL3ApplicationType.BOOTLOADER),
             BOOTLOADER,
             PROGRAM_DATA,
         ]

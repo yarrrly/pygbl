@@ -11,7 +11,7 @@ import pathlib
 
 import pytest
 
-from pygbl import EBLImage, GBLImage, parse_firmware_image
+from pygbl import EBLImage, GBL3Image, parse_firmware_image
 
 FILES = pathlib.Path(__file__).parent / "files"
 IMAGES = sorted(p for p in FILES.glob("*") if p.suffix in (".gbl", ".ebl"))
@@ -36,7 +36,7 @@ def test_roundtrip_exact(path: pathlib.Path) -> None:
 @pytest.mark.parametrize("path", IMAGES, ids=image_id)
 def test_expected_type(path: pathlib.Path) -> None:
     image = parse_firmware_image(path.read_bytes())
-    expected = GBLImage if path.suffix == ".gbl" else EBLImage
+    expected = GBL3Image if path.suffix == ".gbl" else EBLImage
 
     assert isinstance(image, expected)
 
@@ -45,6 +45,8 @@ def test_expected_type(path: pathlib.Path) -> None:
 def test_no_unknown_tags(path: pathlib.Path) -> None:
     """Every tag in the corpus should be one we model explicitly."""
     image = parse_firmware_image(path.read_bytes())
+    assert isinstance(image, (GBL3Image, EBLImage))
+
     unknown = [t for t in image.tags if type(t).__name__.endswith("UnknownTag")]
 
     assert unknown == []
@@ -55,6 +57,7 @@ def test_regenerate_crc_is_stable(path: pathlib.Path) -> None:
     """Recomputing the CRC of an untouched image reproduces it exactly."""
     data = path.read_bytes()
     image = parse_firmware_image(data)
+    assert isinstance(image, (GBL3Image, EBLImage))
 
     assert image.regenerate_crc() == image
     assert image.regenerate_crc().serialize() == data
@@ -64,6 +67,8 @@ def test_regenerate_crc_is_stable(path: pathlib.Path) -> None:
 def test_block_padding_preserves_trailing_data(path: pathlib.Path) -> None:
     data = path.read_bytes()
     image = parse_firmware_image(data)
+    assert isinstance(image, (GBL3Image, EBLImage))
+
     padded = image.serialize(block_size=128)
 
     assert padded.startswith(data)

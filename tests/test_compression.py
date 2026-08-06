@@ -4,17 +4,17 @@ from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
 from pygbl import (
-    GBLApplicationInfo,
-    GBLApplicationType,
-    GBLCompression,
-    GBLEraseProg,
-    GBLHeader,
-    GBLImage,
-    GBLMetadata,
-    GBLProg,
-    GBLProgLZ4,
-    GBLProgLZMA,
-    GBLType,
+    GBL3ApplicationInfo,
+    GBL3ApplicationType,
+    GBL3Compression,
+    GBL3EraseProg,
+    GBL3Header,
+    GBL3Image,
+    GBL3Metadata,
+    GBL3Prog,
+    GBL3ProgLZ4,
+    GBL3ProgLZMA,
+    GBL3Type,
 )
 from pygbl.compression import (
     LZMA_DICT_SIZE,
@@ -31,19 +31,19 @@ PRODUCT_ID = bytes(range(16))
 PAYLOAD = bytes((i * 3) % 211 for i in range(8192)) + b"\x00" * 4096
 
 
-def build_image() -> GBLImage:
-    return GBLImage(
+def build_image() -> GBL3Image:
+    return GBL3Image(
         tags=[
-            GBLHeader(version=3, type=GBLType.NONE),
-            GBLApplicationInfo(
-                type=GBLApplicationType.ZWAVE,
+            GBL3Header(version=3, type=GBL3Type.NONE),
+            GBL3ApplicationInfo(
+                type=GBL3ApplicationType.ZWAVE,
                 version=1,
                 capabilities=0,
                 product_id=PRODUCT_ID,
             ),
-            GBLEraseProg(address=0x8006000, data=PAYLOAD),
-            GBLEraseProg(address=0x8106000, data=PAYLOAD[:1024]),
-            GBLMetadata(metadata=b'{"fw_type": "zwave_ncp"}'),
+            GBL3EraseProg(address=0x8006000, data=PAYLOAD),
+            GBL3EraseProg(address=0x8106000, data=PAYLOAD[:1024]),
+            GBL3Metadata(metadata=b'{"fw_type": "zwave_ncp"}'),
         ]
     ).regenerate_crc()
 
@@ -97,59 +97,59 @@ def test_compression_actually_shrinks() -> None:
 @pytest.mark.parametrize(
     ("algorithm", "tag_type"),
     [
-        (GBLCompression.LZMA, GBLProgLZMA),
-        (GBLCompression.LZ4, GBLProgLZ4),
+        (GBL3Compression.LZMA, GBL3ProgLZMA),
+        (GBL3Compression.LZ4, GBL3ProgLZ4),
     ],
 )
 def test_compress_replaces_program_data_tags(
-    algorithm: GBLCompression,
-    tag_type: type[GBLProgLZMA] | type[GBLProgLZ4],
+    algorithm: GBL3Compression,
+    tag_type: type[GBL3ProgLZMA] | type[GBL3ProgLZ4],
 ) -> None:
     compressed = build_image().compress(algorithm)
 
     assert len(compressed.get_tags(tag_type)) == 2
-    assert compressed.get_tags(GBLEraseProg) == []
+    assert compressed.get_tags(GBL3EraseProg) == []
     assert [t.address for t in compressed.get_tags(tag_type)] == [0x8006000, 0x8106000]
 
 
-@pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compress_decompress_roundtrip(algorithm: GBLCompression) -> None:
+@pytest.mark.parametrize("algorithm", list(GBL3Compression))
+def test_compress_decompress_roundtrip(algorithm: GBL3Compression) -> None:
     image = build_image()
 
     assert image.compress(algorithm).decompress().serialize() == image.serialize()
 
 
-@pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compressed_image_is_valid(algorithm: GBLCompression) -> None:
+@pytest.mark.parametrize("algorithm", list(GBL3Compression))
+def test_compressed_image_is_valid(algorithm: GBL3Compression) -> None:
     compressed = build_image().compress(algorithm)
     data = compressed.serialize()
 
-    assert GBLImage.from_bytes(data) == compressed
+    assert GBL3Image.from_bytes(data) == compressed
 
 
-@pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compress_leaves_other_tags_alone(algorithm: GBLCompression) -> None:
+@pytest.mark.parametrize("algorithm", list(GBL3Compression))
+def test_compress_leaves_other_tags_alone(algorithm: GBL3Compression) -> None:
     image = build_image()
     compressed = image.compress(algorithm)
 
-    assert compressed.get_first_tag(GBLMetadata) == image.get_first_tag(GBLMetadata)
-    assert compressed.get_first_tag(GBLApplicationInfo) == image.get_first_tag(
-        GBLApplicationInfo
+    assert compressed.get_first_tag(GBL3Metadata) == image.get_first_tag(GBL3Metadata)
+    assert compressed.get_first_tag(GBL3ApplicationInfo) == image.get_first_tag(
+        GBL3ApplicationInfo
     )
     # Compression is not signalled in the header, only by the tag ids
-    assert compressed.get_first_tag(GBLHeader).type == GBLType.NONE
+    assert compressed.get_first_tag(GBL3Header).type == GBL3Type.NONE
 
 
 def test_compress_handles_program_data1() -> None:
     """Both program data tag ids are interchangeable and both compress."""
     tags = list(build_image().tags)
-    tags[2] = GBLProg(address=0x8006000, data=PAYLOAD)
-    variant = GBLImage(tags=tags).regenerate_crc()
+    tags[2] = GBL3Prog(address=0x8006000, data=PAYLOAD)
+    variant = GBL3Image(tags=tags).regenerate_crc()
 
-    compressed = variant.compress(GBLCompression.LZMA)
+    compressed = variant.compress(GBL3Compression.LZMA)
 
-    assert compressed.get_tags(GBLProg) == []
-    assert len(compressed.get_tags(GBLProgLZMA)) == 2
+    assert compressed.get_tags(GBL3Prog) == []
+    assert len(compressed.get_tags(GBL3ProgLZMA)) == 2
 
 
 def test_decompress_is_a_noop_on_plain_images() -> None:
@@ -164,8 +164,8 @@ def test_compress_then_encrypt_then_sign_roundtrip() -> None:
     key = bytes(range(16))
     private_key = ec.generate_private_key(ec.SECP256R1())
 
-    sealed = image.compress(GBLCompression.LZMA).encrypt(key).sign(private_key)
+    sealed = image.compress(GBL3Compression.LZMA).encrypt(key).sign(private_key)
 
     assert sealed.verify_signature(private_key.public_key())
-    assert GBLImage.from_bytes(sealed.serialize()) == sealed
+    assert GBL3Image.from_bytes(sealed.serialize()) == sealed
     assert sealed.decrypt(key).decompress().serialize() == image.serialize()

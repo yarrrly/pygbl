@@ -8,12 +8,12 @@ from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
 from pygbl import (
-    GBLCompression,
-    GBLEraseProg,
-    GBLHeader,
-    GBLImage,
-    GBLMetadata,
-    GBLType,
+    GBL3Compression,
+    GBL3EraseProg,
+    GBL3Header,
+    GBL3Image,
+    GBL3Metadata,
+    GBL3Type,
     MissingDependencyError,
 )
 
@@ -22,12 +22,12 @@ CRYPTO_EXTRA = r"pygbl\[crypto\]"
 LZ4_EXTRA = r"pygbl\[lz4\]"
 
 
-def build_image() -> GBLImage:
-    return GBLImage(
+def build_image() -> GBL3Image:
+    return GBL3Image(
         tags=[
-            GBLHeader(version=3, type=GBLType.NONE),
-            GBLEraseProg(address=0x8006000, data=PAYLOAD),
-            GBLMetadata(metadata=b"{}"),
+            GBL3Header(version=3, type=GBL3Type.NONE),
+            GBL3EraseProg(address=0x8006000, data=PAYLOAD),
+            GBL3Metadata(metadata=b"{}"),
         ]
     ).regenerate_crc()
 
@@ -76,11 +76,11 @@ def test_lz4_compress_needs_lz4() -> None:
         patch("pygbl.compression.HAVE_LZ4", False),
         pytest.raises(MissingDependencyError, match=LZ4_EXTRA),
     ):
-        build_image().compress(GBLCompression.LZ4)
+        build_image().compress(GBL3Compression.LZ4)
 
 
 def test_lz4_decompress_needs_lz4() -> None:
-    compressed = build_image().compress(GBLCompression.LZ4)
+    compressed = build_image().compress(GBL3Compression.LZ4)
 
     with (
         patch("pygbl.compression.HAVE_LZ4", False),
@@ -97,8 +97,8 @@ def test_parsing_needs_nothing() -> None:
         patch("pygbl.crypto.HAVE_CRYPTOGRAPHY", False),
         patch("pygbl.compression.HAVE_LZ4", False),
     ):
-        assert GBLImage.from_bytes(data) == image
-        assert GBLImage.from_bytes(data).serialize() == data
+        assert GBL3Image.from_bytes(data) == image
+        assert GBL3Image.from_bytes(data).serialize() == data
         assert image.regenerate_crc() == image
         assert image.get_metadata() == b"{}"
 
@@ -111,6 +111,6 @@ def test_lzma_needs_nothing() -> None:
         patch("pygbl.crypto.HAVE_CRYPTOGRAPHY", False),
         patch("pygbl.compression.HAVE_LZ4", False),
     ):
-        assert image.compress(GBLCompression.LZMA).decompress().serialize() == (
+        assert image.compress(GBL3Compression.LZMA).decompress().serialize() == (
             image.serialize()
         )

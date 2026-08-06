@@ -17,19 +17,19 @@ from elftools.common.exceptions import ELFError
 import pytest
 
 from pygbl import (
-    GBLApplicationInfo,
-    GBLApplicationType,
-    GBLBootloader,
-    GBLCompression,
-    GBLEncryptionInitAesCcm,
-    GBLEraseProg,
-    GBLHeader,
-    GBLImage,
-    GBLMetadata,
-    GBLType,
+    GBL3ApplicationInfo,
+    GBL3ApplicationType,
+    GBL3Bootloader,
+    GBL3Compression,
+    GBL3EncryptionInitAesCcm,
+    GBL3EraseProg,
+    GBL3Header,
+    GBL3Image,
+    GBL3Metadata,
+    GBL3Type,
     ParseError,
-    build_application_gbl,
-    build_bootloader_gbl,
+    build_application_gbl3,
+    build_bootloader_gbl3,
     parse_firmware_image,
     read_application_info,
     read_application_properties,
@@ -54,9 +54,9 @@ def elf_path(name: str) -> pathlib.Path:
     return FILES / f"{name}.out"
 
 
-def commander_gbl(name: str) -> GBLImage:
+def commander_gbl(name: str) -> GBL3Image:
     image = parse_firmware_image((FILES / f"{name}_commander.gbl").read_bytes())
-    assert isinstance(image, GBLImage)
+    assert isinstance(image, GBL3Image)
 
     return image
 
@@ -71,11 +71,13 @@ def metadata_for(name: str) -> bytes | None:
     return path.read_bytes() if path.exists() else None
 
 
-def rebuild(name: str) -> GBLImage:
+def rebuild(name: str) -> GBL3Image:
     """Rebuild an image from its ELF the way `commander` would have."""
     theirs = commander_gbl(name)
     builder = (
-        build_bootloader_gbl if theirs.has_tag(GBLBootloader) else build_application_gbl
+        build_bootloader_gbl3
+        if theirs.has_tag(GBL3Bootloader)
+        else build_application_gbl3
     )
 
     with elf_path(name).open("rb") as f:
@@ -84,7 +86,7 @@ def rebuild(name: str) -> GBLImage:
 
 def is_encrypted(name: str) -> bool:
     return (
-        GBLType.ENCRYPTION_AESCCM in commander_gbl(name).get_first_tag(GBLHeader).type
+        GBL3Type.ENCRYPTION_AESCCM in commander_gbl(name).get_first_tag(GBL3Header).type
     )
 
 
@@ -128,11 +130,11 @@ def test_encrypted_image_matches_the_elf(name: str) -> None:
     plain = commander_gbl(name).decrypt(AES_KEY).decompress()
 
     with elf_path(name).open("rb") as f:
-        ours = build_application_gbl(f, metadata=plain.get_metadata())
+        ours = build_application_gbl3(f, metadata=plain.get_metadata())
 
-    assert plain.get_tags(GBLEraseProg) == ours.get_tags(GBLEraseProg)
-    assert plain.get_first_tag(GBLApplicationInfo) == ours.get_first_tag(
-        GBLApplicationInfo
+    assert plain.get_tags(GBL3EraseProg) == ours.get_tags(GBL3EraseProg)
+    assert plain.get_first_tag(GBL3ApplicationInfo) == ours.get_first_tag(
+        GBL3ApplicationInfo
     )
 
 
@@ -144,20 +146,20 @@ def test_we_can_seal_an_image_the_same_way(name: str) -> None:
     match commander's encoder, so the ciphertext and signature legitimately differ.
     """
     theirs = commander_gbl(name)
-    nonce = theirs.get_first_tag(GBLEncryptionInitAesCcm).nonce
+    nonce = theirs.get_first_tag(GBL3EncryptionInitAesCcm).nonce
     expected = theirs.decrypt(AES_KEY).decompress()
 
     with elf_path(name).open("rb") as f:
-        ours = build_application_gbl(f, metadata=expected.get_metadata())
+        ours = build_application_gbl3(f, metadata=expected.get_metadata())
 
     sealed = (
-        ours.compress(GBLCompression.LZMA)
+        ours.compress(GBL3Compression.LZMA)
         .encrypt(AES_KEY, nonce=nonce)
         .sign(PRIVATE_KEY)
     )
 
     assert sealed.verify_signature(PRIVATE_KEY.public_key())
-    assert GBLImage.from_bytes(sealed.serialize()) == sealed
+    assert GBL3Image.from_bytes(sealed.serialize()) == sealed
 
     # Compare the tag region: `decrypt` carries the outer file's padding through, and
     # commander's image is padded to a 4 byte boundary while ours is freshly built
@@ -187,16 +189,16 @@ def test_application_info_is_read_from_the_elf() -> None:
     with elf_path(APPLICATION).open("rb") as f:
         app_info = read_application_info(f)
 
-    assert app_info == commander_gbl(APPLICATION).get_first_tag(GBLApplicationInfo)
-    assert GBLApplicationType.THREAD in app_info.type
+    assert app_info == commander_gbl(APPLICATION).get_first_tag(GBL3ApplicationInfo)
+    assert GBL3ApplicationType.THREAD in app_info.type
 
 
 def test_application_gbl_without_metadata() -> None:
     with elf_path(APPLICATION).open("rb") as f:
-        image = build_application_gbl(f)
+        image = build_application_gbl3(f)
 
-    assert image.find_first_tag(GBLMetadata) is None
-    assert image.get_first_tag(GBLHeader).type == GBLType.NONE
+    assert image.find_first_tag(GBL3Metadata) is None
+    assert image.get_first_tag(GBL3Header).type == GBL3Type.NONE
     image.validate()
 
 
@@ -205,9 +207,9 @@ def test_program_data_matches_the_segments() -> None:
         segments = read_loadable_segments(f)
 
     with elf_path(APPLICATION).open("rb") as f:
-        image = build_application_gbl(f)
+        image = build_application_gbl3(f)
 
-    assert [(t.address, t.data) for t in image.get_tags(GBLEraseProg)] == [
+    assert [(t.address, t.data) for t in image.get_tags(GBL3EraseProg)] == [
         (s.address, s.data) for s in segments
     ]
 
@@ -216,7 +218,7 @@ def test_bootloader_version_is_read_from_the_elf() -> None:
     with elf_path(BOOTLOADER).open("rb") as f:
         version = read_bootloader_version(f)
 
-    assert version == commander_gbl(BOOTLOADER).get_first_tag(GBLBootloader).version
+    assert version == commander_gbl(BOOTLOADER).get_first_tag(GBL3Bootloader).version
 
 
 def test_bootloader_payload_carries_its_own_crc() -> None:
@@ -225,7 +227,7 @@ def test_bootloader_payload_carries_its_own_crc() -> None:
         segments = read_loadable_segments(f)
 
     with elf_path(BOOTLOADER).open("rb") as f:
-        bootloader = build_bootloader_gbl(f).get_first_tag(GBLBootloader)
+        bootloader = build_bootloader_gbl3(f).get_first_tag(GBL3Bootloader)
 
     payload = segments[0].data
 
@@ -241,9 +243,9 @@ def test_bootloader_builder_rejects_split_images() -> None:
     """An application ELF has several separate runs, so it is not a bootloader."""
     with elf_path(APPLICATION).open("rb") as f:
         with pytest.raises(ParseError, match="one contiguous bootloader segment"):
-            build_bootloader_gbl(f)
+            build_bootloader_gbl3(f)
 
 
 def test_rejects_non_elf_input() -> None:
     with pytest.raises(ELFError):
-        build_application_gbl(io.BytesIO(b"not an ELF at all"))
+        build_application_gbl3(io.BytesIO(b"not an ELF at all"))

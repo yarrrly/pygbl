@@ -7,17 +7,17 @@ from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
 from pygbl import (
-    GBLApplicationInfo,
-    GBLApplicationType,
-    GBLEncryptedData,
-    GBLEncryptionInitAesCcm,
-    GBLEnd,
-    GBLEraseProg,
-    GBLHeader,
-    GBLImage,
-    GBLMetadata,
-    GBLSignature,
-    GBLType,
+    GBL3ApplicationInfo,
+    GBL3ApplicationType,
+    GBL3EncryptedData,
+    GBL3EncryptionInitAesCcm,
+    GBL3End,
+    GBL3EraseProg,
+    GBL3Header,
+    GBL3Image,
+    GBL3Metadata,
+    GBL3Signature,
+    GBL3Type,
 )
 from pygbl.crypto import (
     AES_KEY_SIZE,
@@ -35,18 +35,18 @@ PRODUCT_ID = bytes(range(16))
 PRIVATE_KEY = ec.generate_private_key(ec.SECP256R1())
 
 
-def build_image() -> GBLImage:
-    return GBLImage(
+def build_image() -> GBL3Image:
+    return GBL3Image(
         tags=[
-            GBLHeader(version=3, type=GBLType.NONE),
-            GBLApplicationInfo(
-                type=GBLApplicationType.ZWAVE,
+            GBL3Header(version=3, type=GBL3Type.NONE),
+            GBL3ApplicationInfo(
+                type=GBL3ApplicationType.ZWAVE,
                 version=1,
                 capabilities=0,
                 product_id=PRODUCT_ID,
             ),
-            GBLEraseProg(address=0x8006000, data=bytes(range(256)) * 4),
-            GBLMetadata(metadata=b'{"fw_type": "zwave_ncp"}'),
+            GBL3EraseProg(address=0x8006000, data=bytes(range(256)) * 4),
+            GBL3Metadata(metadata=b'{"fw_type": "zwave_ncp"}'),
         ]
     ).regenerate_crc()
 
@@ -95,22 +95,22 @@ def test_sign_and_verify() -> None:
     signed = build_image().sign(PRIVATE_KEY)
 
     assert signed.verify_signature(PRIVATE_KEY.public_key())
-    assert len(signed.get_first_tag(GBLSignature).r) == 32
-    assert len(signed.get_first_tag(GBLSignature).s) == 32
+    assert len(signed.get_first_tag(GBL3Signature).r) == 32
+    assert len(signed.get_first_tag(GBL3Signature).s) == 32
 
 
 def test_signing_sets_header_flag() -> None:
     signed = build_image().sign(PRIVATE_KEY)
 
-    assert GBLType.SIGNATURE_ECDSA_P256 in signed.get_first_tag(GBLHeader).type
+    assert GBL3Type.SIGNATURE_ECDSA_P256 in signed.get_first_tag(GBL3Header).type
 
 
 def test_signed_image_is_valid_and_reparses() -> None:
     signed = build_image().sign(PRIVATE_KEY)
     data = signed.serialize()
 
-    assert GBLImage.from_bytes(data) == signed
-    assert GBLImage.from_bytes(data).verify_signature(PRIVATE_KEY.public_key())
+    assert GBL3Image.from_bytes(data) == signed
+    assert GBL3Image.from_bytes(data).verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_signing_digest_excludes_signature_and_end() -> None:
@@ -120,7 +120,7 @@ def test_signing_digest_excludes_signature_and_end() -> None:
         b"".join(
             serialize_tag(t)
             for t in signed.tags
-            if not isinstance(t, (GBLSignature, GBLEnd))
+            if not isinstance(t, (GBL3Signature, GBL3End))
         )
     ).digest()
 
@@ -129,7 +129,7 @@ def test_signing_digest_excludes_signature_and_end() -> None:
 
 def test_verify_rejects_corrupted_signature() -> None:
     signed = build_image().sign(PRIVATE_KEY)
-    signature = signed.get_first_tag(GBLSignature)
+    signature = signed.get_first_tag(GBL3Signature)
     corrupted = bytearray(signature.r)
     corrupted[5] ^= 0xFF
 
@@ -144,7 +144,7 @@ def test_verify_rejects_corrupted_signature() -> None:
 
 def test_verify_rejects_tampered_payload() -> None:
     signed = build_image().sign(PRIVATE_KEY)
-    program = signed.get_first_tag(GBLEraseProg)
+    program = signed.get_first_tag(GBL3EraseProg)
     data = bytearray(program.data)
     data[0] ^= 0xFF
 
@@ -172,7 +172,7 @@ def test_signing_is_stable_across_reparse() -> None:
     """Re-signing an already signed image replaces the signature rather than stacking."""
     signed = build_image().sign(PRIVATE_KEY).sign(PRIVATE_KEY)
 
-    assert len(signed.get_tags(GBLSignature)) == 1
+    assert len(signed.get_tags(GBL3Signature)) == 1
     assert signed.verify_signature(PRIVATE_KEY.public_key())
 
 
@@ -185,12 +185,12 @@ def test_encrypt_and_decrypt() -> None:
 
 def test_encrypt_sets_header_flag_and_init_tag() -> None:
     encrypted = build_image().encrypt(KEY, nonce=NONCE)
-    init = encrypted.get_first_tag(GBLEncryptionInitAesCcm)
+    init = encrypted.get_first_tag(GBL3EncryptionInitAesCcm)
 
-    assert GBLType.ENCRYPTION_AESCCM in encrypted.get_first_tag(GBLHeader).type
+    assert GBL3Type.ENCRYPTION_AESCCM in encrypted.get_first_tag(GBL3Header).type
     assert init.nonce == NONCE
     assert init.msg_len == sum(
-        len(t.ciphertext) for t in encrypted.get_tags(GBLEncryptedData)
+        len(t.ciphertext) for t in encrypted.get_tags(GBL3EncryptedData)
     )
 
 
@@ -198,9 +198,9 @@ def test_encrypt_wraps_each_tag_separately() -> None:
     image = build_image()
     encrypted = image.encrypt(KEY, nonce=NONCE)
     plaintext_tags = [
-        t for t in image.tags if not isinstance(t, (GBLHeader, GBLEnd, GBLSignature))
+        t for t in image.tags if not isinstance(t, (GBL3Header, GBL3End, GBL3Signature))
     ]
-    encrypted_tags = encrypted.get_tags(GBLEncryptedData)
+    encrypted_tags = encrypted.get_tags(GBL3EncryptedData)
 
     assert len(encrypted_tags) == len(plaintext_tags)
     assert [len(t.ciphertext) for t in encrypted_tags] == [
@@ -212,11 +212,11 @@ def test_encrypted_keystream_is_continuous() -> None:
     """One continuous keystream spans all encrypted tags, so they cannot be reordered."""
     image = build_image()
     encrypted = image.encrypt(KEY, nonce=NONCE)
-    ciphertext = b"".join(t.ciphertext for t in encrypted.get_tags(GBLEncryptedData))
+    ciphertext = b"".join(t.ciphertext for t in encrypted.get_tags(GBL3EncryptedData))
     plaintext = b"".join(
         serialize_tag(t)
         for t in image.tags
-        if not isinstance(t, (GBLHeader, GBLEnd, GBLSignature))
+        if not isinstance(t, (GBL3Header, GBL3End, GBL3Signature))
     )
 
     assert aes_ctr_crypt(KEY, NONCE, plaintext) == ciphertext
@@ -224,8 +224,8 @@ def test_encrypted_keystream_is_continuous() -> None:
 
 def test_encrypt_uses_a_random_nonce_by_default() -> None:
     image = build_image()
-    first = image.encrypt(KEY).get_first_tag(GBLEncryptionInitAesCcm)
-    second = image.encrypt(KEY).get_first_tag(GBLEncryptionInitAesCcm)
+    first = image.encrypt(KEY).get_first_tag(GBL3EncryptionInitAesCcm)
+    second = image.encrypt(KEY).get_first_tag(GBL3EncryptionInitAesCcm)
 
     assert first.nonce != second.nonce
 
@@ -245,10 +245,10 @@ def test_encrypt_then_sign() -> None:
     sealed = build_image().encrypt(KEY, nonce=NONCE).sign(PRIVATE_KEY)
 
     assert sealed.verify_signature(PRIVATE_KEY.public_key())
-    assert sealed.get_first_tag(GBLHeader).type == (
-        GBLType.ENCRYPTION_AESCCM | GBLType.SIGNATURE_ECDSA_P256
+    assert sealed.get_first_tag(GBL3Header).type == (
+        GBL3Type.ENCRYPTION_AESCCM | GBL3Type.SIGNATURE_ECDSA_P256
     )
-    assert GBLImage.from_bytes(sealed.serialize()) == sealed
+    assert GBL3Image.from_bytes(sealed.serialize()) == sealed
 
 
 def test_decrypt_drops_signature_and_flags() -> None:
@@ -256,6 +256,6 @@ def test_decrypt_drops_signature_and_flags() -> None:
     sealed = image.encrypt(KEY, nonce=NONCE).sign(PRIVATE_KEY)
     decrypted = sealed.decrypt(KEY)
 
-    assert decrypted.find_first_tag(GBLSignature) is None
-    assert decrypted.get_first_tag(GBLHeader).type == GBLType.NONE
+    assert decrypted.find_first_tag(GBL3Signature) is None
+    assert decrypted.get_first_tag(GBL3Header).type == GBL3Type.NONE
     assert decrypted.serialize() == image.serialize()

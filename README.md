@@ -31,7 +31,7 @@ Parse an image and inspect its tags:
 ```python
 import pathlib
 
-from pygbl import GBLApplicationInfo, parse_firmware_image
+from pygbl import GBL3ApplicationInfo, parse_firmware_image
 
 data = pathlib.Path("ncp-uart-hw.gbl").read_bytes()
 image = parse_firmware_image(data)
@@ -39,7 +39,7 @@ image = parse_firmware_image(data)
 for tag in image.tags:
     print(tag)
 
-print(image.get_first_tag(GBLApplicationInfo).version)
+print(image.get_first_tag(GBL3ApplicationInfo).version)
 print(image.get_metadata())  # opaque bytes, the schema is vendor defined
 
 assert image.serialize() == data
@@ -51,12 +51,12 @@ Modify an image. Tags are frozen dataclasses, so `dataclasses.replace` works, an
 ```python
 import dataclasses
 
-from pygbl import GBLEnd, GBLMetadata
+from pygbl import GBL3End, GBL3Metadata
 
 modified = dataclasses.replace(
     image,
-    tags=[t for t in image.tags if not isinstance(t, GBLEnd)]
-    + [GBLMetadata(metadata=b'{"fw_type": "zigbee_ncp"}')],
+    tags=[t for t in image.tags if not isinstance(t, GBL3End)]
+    + [GBL3Metadata(metadata=b'{"fw_type": "zigbee_ncp"}')],
 ).regenerate_crc()
 ```
 
@@ -65,14 +65,14 @@ Compress, encrypt and sign, in the order the bootloader expects:
 ```python
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-from pygbl import GBLCompression
+from pygbl import GBL3Compression
 
 private_key = load_pem_private_key(
     pathlib.Path("vendor_sign.key").read_bytes(), password=None
 )
 key = bytes.fromhex("7F8FE53979B31BC556FCB131AFF42414")
 
-sealed = image.compress(GBLCompression.LZMA).encrypt(key).sign(private_key)
+sealed = image.compress(GBL3Compression.LZMA).encrypt(key).sign(private_key)
 pathlib.Path("signed.gbl").write_bytes(sealed.serialize(block_size=4))
 ```
 
@@ -91,17 +91,41 @@ stored in flash but linked at its RAM address — and the application info tag i
 from the SDK's `application_properties_t` struct:
 
 ```python
-from pygbl import build_application_gbl, build_bootloader_gbl
+from pygbl import build_application_gbl3, build_bootloader_gbl3
 
 with open("zigbee_ncp.out", "rb") as f:
-    image = build_application_gbl(f, metadata=b'{"fw_type": "zigbee_ncp"}')
+    image = build_application_gbl3(f, metadata=b'{"fw_type": "zigbee_ncp"}')
 
 with open("bootloader.out", "rb") as f:
-    bootloader = build_bootloader_gbl(f)
+    bootloader = build_bootloader_gbl3(f)
 ```
 
 Both reproduce `commander gbl create` byte-for-byte. Bootloader payloads carry a CRC32
-of themselves, which `build_bootloader_gbl` appends for you.
+of themselves, which `build_bootloader_gbl3` appends for you.
+
+## GBLv4
+
+Series 3 parts use GBLv4, a different format that nests tags inside a signed manifest
+and can bundle several updates in one file. `parse_firmware_image` recognizes it by its
+magic and returns a `GBL4Image`, which round-trips byte-for-byte like the rest:
+
+```python
+from pygbl import GBL4Image, GBL4MemorySectionInfo, GBL4UpdateMemorySection
+
+image = parse_firmware_image(pathlib.Path("light-simg301.gbl4").read_bytes())
+assert isinstance(image, GBL4Image)
+assert image.serialize() == data
+
+# `get_tags` searches the whole tree, at any depth
+for update in image.get_tags(GBL4UpdateMemorySection):
+    print(f"{update.target_address:#010x} {update.plain_image_size} bytes")
+
+for info in image.get_tags(GBL4MemorySectionInfo):
+    print(info.compression_scheme, info.encryption_scheme, info.nonce.hex())
+```
+
+Reading and writing are supported; building a v4 image from an ELF is not — the ELF
+helpers are GBLv3 only.
 
 ## EBL
 

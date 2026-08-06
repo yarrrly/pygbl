@@ -9,14 +9,14 @@ from elftools.elf.sections import SymbolTableSection
 
 from pygbl.gbl3 import (
     BootloaderVersion,
-    GBLApplicationInfo,
-    GBLBootloader,
-    GBLEraseProg,
-    GBLHeader,
-    GBLImage,
-    GBLMetadata,
-    GBLTagBase,
-    GBLType,
+    GBL3ApplicationInfo,
+    GBL3Bootloader,
+    GBL3EraseProg,
+    GBL3Header,
+    GBL3Image,
+    GBL3Metadata,
+    GBL3TagBase,
+    GBL3Type,
 )
 from pygbl.types import ParseError
 
@@ -28,7 +28,7 @@ APP_PROPERTIES_SYMBOLS = ("sl_app_properties", "application_properties")
 APP_INFO_OFFSET = 28
 APP_INFO_SIZE = 28
 
-GBL_SPEC_VERSION = 3
+GBL3_SPEC_VERSION = 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -95,10 +95,10 @@ def _application_properties(elf: ELFFile) -> bytes:
     return properties
 
 
-def _application_info(elf: ELFFile) -> GBLApplicationInfo:
+def _application_info(elf: ELFFile) -> GBL3ApplicationInfo:
     properties = _application_properties(elf)
 
-    return GBLApplicationInfo.from_payload(
+    return GBL3ApplicationInfo.from_payload(
         properties[APP_INFO_OFFSET : APP_INFO_OFFSET + APP_INFO_SIZE]
     )
 
@@ -118,7 +118,7 @@ def read_application_properties(elf_file: BinaryIO) -> bytes:
     return _application_properties(ELFFile(elf_file))
 
 
-def read_application_info(elf_file: BinaryIO) -> GBLApplicationInfo:
+def read_application_info(elf_file: BinaryIO) -> GBL3ApplicationInfo:
     return _application_info(ELFFile(elf_file))
 
 
@@ -126,29 +126,29 @@ def read_bootloader_version(elf_file: BinaryIO) -> BootloaderVersion:
     return BootloaderVersion.from_int(_application_info(ELFFile(elf_file)).version)
 
 
-def build_application_gbl(
+def build_application_gbl3(
     elf_file: BinaryIO, *, metadata: bytes | None = None
-) -> GBLImage:
+) -> GBL3Image:
     """Build an application GBL from a linked ELF."""
     elf = ELFFile(elf_file)
-    tags: list[GBLTagBase] = [
-        GBLHeader(version=GBL_SPEC_VERSION, type=GBLType.NONE),
+    tags: list[GBL3TagBase] = [
+        GBL3Header(version=GBL3_SPEC_VERSION, type=GBL3Type.NONE),
         _application_info(elf),
         *[
-            GBLEraseProg(address=segment.address, data=segment.data)
+            GBL3EraseProg(address=segment.address, data=segment.data)
             for segment in _loadable_segments(elf)
         ],
     ]
 
     if metadata is not None:
-        tags.append(GBLMetadata(metadata=metadata))
+        tags.append(GBL3Metadata(metadata=metadata))
 
-    return GBLImage(tags=tags).regenerate_crc()
+    return GBL3Image(tags=tags).regenerate_crc()
 
 
-def build_bootloader_gbl(
+def build_bootloader_gbl3(
     elf_file: BinaryIO, *, metadata: bytes | None = None
-) -> GBLImage:
+) -> GBL3Image:
     """Build a bootloader GBL from a linked ELF."""
     elf = ELFFile(elf_file)
     segments = _loadable_segments(elf)
@@ -159,9 +159,9 @@ def build_bootloader_gbl(
         )
 
     segment = segments[0]
-    tags: list[GBLTagBase] = [
-        GBLHeader(version=GBL_SPEC_VERSION, type=GBLType.NONE),
-        GBLBootloader(
+    tags: list[GBL3TagBase] = [
+        GBL3Header(version=GBL3_SPEC_VERSION, type=GBL3Type.NONE),
+        GBL3Bootloader(
             version=BootloaderVersion.from_int(_application_info(elf).version),
             address=segment.address,
             # The bootloader payload is followed by a CRC32 of itself
@@ -171,6 +171,6 @@ def build_bootloader_gbl(
     ]
 
     if metadata is not None:
-        tags.append(GBLMetadata(metadata=metadata))
+        tags.append(GBL3Metadata(metadata=metadata))
 
-    return GBLImage(tags=tags).regenerate_crc()
+    return GBL3Image(tags=tags).regenerate_crc()
