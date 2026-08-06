@@ -112,7 +112,7 @@ class BootloaderVersion:
 
 @dataclasses.dataclass(frozen=True)
 class GBLHeader:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.HEADER
+    tag_id: ClassVar[GBLTagId] = GBLTagId.HEADER
 
     # The spec encodes GBL v3 as `0x03000000`. It is read big-endian so that the value
     # matches the human-readable specification version.
@@ -134,7 +134,7 @@ class GBLHeader:
 
 @dataclasses.dataclass(frozen=True)
 class GBLApplicationInfo:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.APP_INFO
+    tag_id: ClassVar[GBLTagId] = GBLTagId.APP_INFO
 
     type: GBLApplicationType
     version: int
@@ -165,7 +165,7 @@ class GBLApplicationInfo:
 
 @dataclasses.dataclass(frozen=True)
 class GBLSeUpgrade:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.SE_UPGRADE
+    tag_id: ClassVar[GBLTagId] = GBLTagId.SE_UPGRADE
 
     blob_size: int
     version: int
@@ -192,7 +192,7 @@ class GBLSeUpgrade:
 
 @dataclasses.dataclass(frozen=True)
 class GBLBootloader:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.BOOTLOADER
+    tag_id: ClassVar[GBLTagId] = GBLTagId.BOOTLOADER
 
     version: BootloaderVersion
     address: int
@@ -222,7 +222,7 @@ class _GBLAddressedData:
     address: int
     data: bytes
 
-    TAG_ID: ClassVar[GBLTagId]
+    tag_id: ClassVar[GBLTagId]
 
     @classmethod
     def from_payload(cls, payload: bytes) -> Self:
@@ -240,27 +240,27 @@ class _GBLAddressedData:
 
 @dataclasses.dataclass(frozen=True)
 class GBLProgramData1(_GBLAddressedData):
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA1
+    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA1
 
 
 @dataclasses.dataclass(frozen=True)
 class GBLProgramData2(_GBLAddressedData):
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA2
+    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA2
 
 
 @dataclasses.dataclass(frozen=True)
 class GBLProgramDataLZ4(_GBLAddressedData):
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA_LZ4
+    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA_LZ4
 
 
 @dataclasses.dataclass(frozen=True)
 class GBLProgramDataLZMA(_GBLAddressedData):
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA_LZMA
+    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA_LZMA
 
 
 @dataclasses.dataclass(frozen=True)
 class GBLMetadata:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.METADATA
+    tag_id: ClassVar[GBLTagId] = GBLTagId.METADATA
 
     metadata: bytes
 
@@ -274,7 +274,7 @@ class GBLMetadata:
 
 @dataclasses.dataclass(frozen=True)
 class GBLSignature:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.SIGNATURE
+    tag_id: ClassVar[GBLTagId] = GBLTagId.SIGNATURE
 
     r: bytes
     s: bytes
@@ -294,7 +294,7 @@ class GBLSignature:
 
 @dataclasses.dataclass(frozen=True)
 class GBLEncryptionHeader:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.ENC_HEADER
+    tag_id: ClassVar[GBLTagId] = GBLTagId.ENC_HEADER
 
     data: bytes
 
@@ -308,7 +308,7 @@ class GBLEncryptionHeader:
 
 @dataclasses.dataclass(frozen=True)
 class GBLEncryptionInitAesCcm:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.ENC_INIT
+    tag_id: ClassVar[GBLTagId] = GBLTagId.ENC_INIT
 
     msg_len: int
     nonce: bytes
@@ -332,7 +332,7 @@ class GBLEncryptionInitAesCcm:
 class GBLEncryptedData:
     """AES-CCM ciphertext wrapping the plaintext tags. Not decrypted by this library."""
 
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.ENC_GBL_DATA
+    tag_id: ClassVar[GBLTagId] = GBLTagId.ENC_GBL_DATA
 
     ciphertext: bytes
 
@@ -346,7 +346,7 @@ class GBLEncryptedData:
 
 @dataclasses.dataclass(frozen=True)
 class GBLEnd:
-    TAG_ID: ClassVar[GBLTagId] = GBLTagId.END
+    tag_id: ClassVar[GBLTagId] = GBLTagId.END
 
     crc: int
 
@@ -419,19 +419,12 @@ COMPRESSORS: dict[GBLCompression, tuple[type[GBLTag], Callable[[bytes], bytes]]]
 }
 
 
-def gbl_tag_id(tag: GBLTag) -> int:
-    if isinstance(tag, GBLUnknownTag):
-        return tag.tag_id
-
-    return int(tag.TAG_ID)
-
-
 def serialize_tag(tag: GBLTag) -> bytes:
     """Serialize a single tag, header included, exactly as it appears on the wire."""
     payload = tag.serialize_payload()
 
     return (
-        gbl_tag_id(tag).to_bytes(4, "little")
+        int(tag.tag_id).to_bytes(4, "little")
         + len(payload).to_bytes(4, "little")
         + payload
     )
