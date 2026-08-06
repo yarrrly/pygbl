@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import dataclasses
 import enum
+import hashlib
 from typing import Any, ClassVar, Self, Union
 import zlib
 
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from pygbl.compression import (
+    lz4_compress,
+    lz4_decompress,
+    lzma_compress,
+    lzma_decompress,
+)
+from pygbl.crypto import aes_ctr_crypt, generate_nonce, sign_digest, verify_digest
 from pygbl.types import (
     VALID_CRC32,
     ParseError,
@@ -60,6 +71,11 @@ class GBLType(enum.IntFlag, boundary=enum.KEEP):
     NONE = 0x00000000
     ENCRYPTION_AESCCM = 0x00000001
     SIGNATURE_ECDSA_P256 = 0x00000100
+
+
+class GBLCompression(enum.Enum):
+    LZMA = "lzma"
+    LZ4 = "lz4"
 
 
 class GBLApplicationType(enum.IntFlag, boundary=enum.KEEP):
@@ -397,12 +413,65 @@ PROGRAM_DATA_TAGS = (
     GBLProgramDataLZMA,
 )
 
+COMPRESSORS: dict[GBLCompression, tuple[type[GBLTag], Callable[[bytes], bytes]]] = {
+    GBLCompression.LZMA: (GBLProgramDataLZMA, lzma_compress),
+    GBLCompression.LZ4: (GBLProgramDataLZ4, lz4_compress),
+}
+
 
 def gbl_tag_id(tag: GBLTag) -> int:
     if isinstance(tag, GBLUnknownTag):
         return tag.tag_id
 
     return int(tag.TAG_ID)
+
+
+def serialize_tag(tag: GBLTag) -> bytes:
+    """Serialize a single tag, header included, exactly as it appears on the wire."""
+    payload = tag.serialize_payload()
+
+    return (
+        gbl_tag_id(tag).to_bytes(4, "little")
+        + len(payload).to_bytes(4, "little")
+        + payload
+    )
+
+
+def parse_tag_stream(data: bytes, *, stop_at_end: bool) -> tuple[list[GBLTag], int]:
+    """Parse a sequence of tags, returning them and the offset just past the last one.
+
+    Encrypted images wrap a bare tag stream with no end tag, so parsing has to be able
+    to run to exhaustion as well as stop at the end tag.
+    """
+    tags: list[GBLTag] = []
+    offset = 0
+
+    while offset < len(data):
+        if offset + 8 > len(data):
+            raise ParseError("Image is truncated: incomplete tag header")
+
+        tag_id = int.from_bytes(data[offset : offset + 4], "little")
+        length = int.from_bytes(data[offset + 4 : offset + 8], "little")
+        start = offset + 8
+        end = start + length
+
+        if end > len(data):
+            raise ParseError(
+                f"Tag {tag_id:#010x} is truncated: expected {length} bytes,"
+                f" got {len(data) - start}"
+            )
+
+        tags.append(_parse_tag(tag_id, data[start:end]))
+        offset = end
+
+        # A GBL ends at the first end tag. Everything after it is trailing data.
+        if stop_at_end and tag_id == GBLTagId.END:
+            return tags, offset
+
+    if stop_at_end:
+        raise ParseError("Image is truncated: no end tag found")
+
+    return tags, offset
 
 
 @dataclasses.dataclass(frozen=True)
@@ -417,31 +486,7 @@ class GBLImage:
     @classmethod
     def from_bytes(cls, data: bytes, *, validate: bool = True) -> GBLImage:
         data = bytes(data)
-        tags: list[GBLTag] = []
-        offset = 0
-
-        while True:
-            if offset + 8 > len(data):
-                raise ParseError("Image is truncated: incomplete tag header")
-
-            tag_id = int.from_bytes(data[offset : offset + 4], "little")
-            length = int.from_bytes(data[offset + 4 : offset + 8], "little")
-            start = offset + 8
-            end = start + length
-
-            if end > len(data):
-                raise ParseError(
-                    f"Tag {tag_id:#010x} is truncated: expected {length} bytes,"
-                    f" got {len(data) - start}"
-                )
-
-            tags.append(_parse_tag(tag_id, data[start:end]))
-            offset = end
-
-            # A GBL ends at the first end tag. Everything after it is trailing data.
-            if tag_id == GBLTagId.END:
-                break
-
+        tags, offset = parse_tag_stream(data, stop_at_end=True)
         image = cls(tags=tags, trailing_data=data[offset:])
 
         if validate:
@@ -451,17 +496,7 @@ class GBLImage:
 
     def serialize_tags(self) -> bytes:
         """Serialize only the tag region, which is what the CRC covers."""
-        chunks = []
-
-        for tag in self.tags:
-            payload = tag.serialize_payload()
-            chunks.append(
-                gbl_tag_id(tag).to_bytes(4, "little")
-                + len(payload).to_bytes(4, "little")
-                + payload
-            )
-
-        return b"".join(chunks)
+        return b"".join(serialize_tag(t) for t in self.tags)
 
     def serialize(self, *, block_size: int = 1, padding: bytes = b"\xff") -> bytes:
         return pad_to_multiple(
@@ -516,6 +551,147 @@ class GBLImage:
         return type(self)(
             tags=[*tags, GBLEnd(crc=crc)], trailing_data=self.trailing_data
         )
+
+    def signing_digest(self) -> bytes:
+        """The SHA-256 digest an ECDSA signature covers.
+
+        The bootloader hashes every tag as it appears on the wire, before decryption,
+        skipping only the signature and end tags.
+        """
+        return hashlib.sha256(
+            b"".join(
+                serialize_tag(t)
+                for t in self.tags
+                if not isinstance(t, (GBLSignature, GBLEnd))
+            )
+        ).digest()
+
+    def sign(self, private_key: ec.EllipticCurvePrivateKey) -> GBLImage:
+        """Return a signed copy of this image.
+
+        The header's type flags are part of the signed region, so they are updated
+        before the digest is computed.
+        """
+        tags = [t for t in self.tags if not isinstance(t, (GBLSignature, GBLEnd))]
+        header = self.get_first_tag(GBLHeader)
+        tags[tags.index(header)] = dataclasses.replace(
+            header, type=header.type | GBLType.SIGNATURE_ECDSA_P256
+        )
+
+        unsigned = type(self)(tags=tags)
+        r, s = sign_digest(private_key, unsigned.signing_digest())
+
+        return type(self)(
+            tags=[*tags, GBLSignature(r=r, s=s)], trailing_data=self.trailing_data
+        ).regenerate_crc()
+
+    def verify_signature(self, public_key: ec.EllipticCurvePublicKey) -> bool:
+        signature = self.find_first_tag(GBLSignature)
+
+        if signature is None:
+            raise KeyError("Image is not signed")
+
+        return verify_digest(
+            public_key, self.signing_digest(), signature.r, signature.s
+        )
+
+    def encrypt(self, key: bytes, *, nonce: bytes | None = None) -> GBLImage:
+        """Return an AES-CTR encrypted copy of this image.
+
+        Every tag except the header and end tag is wrapped into its own encrypted data
+        tag. The keystream runs continuously across them, so they cannot be reordered.
+        """
+        if nonce is None:
+            nonce = generate_nonce()
+
+        header = self.get_first_tag(GBLHeader)
+        plaintext_tags = [
+            t for t in self.tags if not isinstance(t, (GBLHeader, GBLEnd, GBLSignature))
+        ]
+
+        if any(isinstance(t, GBLEncryptedData) for t in plaintext_tags):
+            raise ValueError("Image is already encrypted")
+
+        chunks = [serialize_tag(t) for t in plaintext_tags]
+        ciphertext = aes_ctr_crypt(key, nonce, b"".join(chunks))
+
+        encrypted = []
+        offset = 0
+
+        for chunk in chunks:
+            encrypted.append(
+                GBLEncryptedData(ciphertext=ciphertext[offset : offset + len(chunk)])
+            )
+            offset += len(chunk)
+
+        return type(self)(
+            tags=[
+                dataclasses.replace(
+                    header, type=header.type | GBLType.ENCRYPTION_AESCCM
+                ),
+                GBLEncryptionInitAesCcm(msg_len=len(ciphertext), nonce=nonce),
+                *encrypted,
+            ],
+            trailing_data=self.trailing_data,
+        ).regenerate_crc()
+
+    def decrypt(self, key: bytes) -> GBLImage:
+        """Return a decrypted copy of this image, dropping any signature.
+
+        A signature covers the ciphertext, so it cannot carry over to the plaintext.
+        """
+        init = self.find_first_tag(GBLEncryptionInitAesCcm)
+
+        if init is None:
+            raise KeyError("Image is not encrypted")
+
+        ciphertext = b"".join(t.ciphertext for t in self.get_tags(GBLEncryptedData))
+        plaintext = aes_ctr_crypt(key, init.nonce, ciphertext)
+        tags, _ = parse_tag_stream(plaintext, stop_at_end=False)
+        header = self.get_first_tag(GBLHeader)
+
+        return type(self)(
+            tags=[
+                dataclasses.replace(
+                    header,
+                    type=header.type
+                    & ~(GBLType.ENCRYPTION_AESCCM | GBLType.SIGNATURE_ECDSA_P256),
+                ),
+                *tags,
+            ],
+            trailing_data=self.trailing_data,
+        ).regenerate_crc()
+
+    def compress(self, algorithm: GBLCompression) -> GBLImage:
+        """Return a copy with every uncompressed program data tag compressed."""
+        tag_type, compress = COMPRESSORS[algorithm]
+        tags: list[GBLTag] = []
+
+        for tag in self.tags:
+            if isinstance(tag, (GBLProgramData1, GBLProgramData2)):
+                tags.append(tag_type(address=tag.address, data=compress(tag.data)))
+            else:
+                tags.append(tag)
+
+        return type(self)(tags=tags, trailing_data=self.trailing_data).regenerate_crc()
+
+    def decompress(self) -> GBLImage:
+        """Return a copy with every compressed program data tag expanded."""
+        tags: list[GBLTag] = []
+
+        for tag in self.tags:
+            if isinstance(tag, GBLProgramDataLZMA):
+                tags.append(
+                    GBLProgramData2(address=tag.address, data=lzma_decompress(tag.data))
+                )
+            elif isinstance(tag, GBLProgramDataLZ4):
+                tags.append(
+                    GBLProgramData2(address=tag.address, data=lz4_decompress(tag.data))
+                )
+            else:
+                tags.append(tag)
+
+        return type(self)(tags=tags, trailing_data=self.trailing_data).regenerate_crc()
 
     def is_combined_bootloader_app(self) -> bool:
         app_info = self.find_first_tag(GBLApplicationInfo)
