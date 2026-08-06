@@ -4,10 +4,8 @@ from collections.abc import Callable
 import dataclasses
 import enum
 import hashlib
-from typing import Any, Self, Union
+from typing import TYPE_CHECKING, Any, Self, Union
 import zlib
-
-from cryptography.hazmat.primitives.asymmetric import ec
 
 from pygbl.compression import (
     lz4_compress,
@@ -24,6 +22,10 @@ from pygbl.types import (
     check_length,
     pad_to_multiple,
 )
+
+if TYPE_CHECKING:
+    # Only needed for annotations: signing is an optional feature
+    from cryptography.hazmat.primitives.asymmetric import ec
 
 GBL_MAGIC = b"\xeb\x17\xa6\x03"
 

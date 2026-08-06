@@ -10,13 +10,19 @@ authors = [{ name = "puddly", email = "puddly3@gmail.com" }]
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-dependencies = ["cryptography", "lz4"]
+dependencies = []
 
 [project.urls]
 repository = "https://github.com/zigpy/pygbl"
 
 [project.optional-dependencies]
+# Signing and AES-CTR encryption
+crypto = ["cryptography"]
+# LZ4 compression. LZMA needs nothing: it is in the standard library.
+lz4 = ["lz4"]
+all = ["pygbl[crypto,lz4]"]
 dev = [
+  "pygbl[all]",
   "uv>=0.11.14",
   "ruff>=0.14.6",
   "mypy>=2.1.0",

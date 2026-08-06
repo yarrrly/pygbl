@@ -644,14 +644,19 @@ wheels = [
 [[package]]
 name = "pygbl"
 source = { editable = "." }
-dependencies = [
+
+[package.optional-dependencies]
+all = [
     { name = "cryptography" },
     { name = "lz4" },
 ]
-
-[package.optional-dependencies]
+crypto = [
+    { name = "cryptography" },
+]
 dev = [
     { name = "codespell" },
+    { name = "cryptography" },
+    { name = "lz4" },
     { name = "mypy" },
     { name = "prek" },
     { name = "pytest" },
@@ -661,14 +666,19 @@ dev = [
     { name = "types-setuptools" },
     { name = "uv" },
 ]
+lz4 = [
+    { name = "lz4" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "codespell", marker = "extra == 'dev'", specifier = ">=2.4.2" },
-    { name = "cryptography" },
-    { name = "lz4" },
+    { name = "cryptography", marker = "extra == 'crypto'" },
+    { name = "lz4", marker = "extra == 'lz4'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.1.0" },
     { name = "prek", marker = "extra == 'dev'", specifier = ">=0.3.11" },
+    { name = "pygbl", extras = ["all"], marker = "extra == 'dev'" },
+    { name = "pygbl", extras = ["crypto", "lz4"], marker = "extra == 'all'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
@@ -676,7 +686,7 @@ requires-dist = [
     { name = "types-setuptools", marker = "extra == 'dev'", specifier = ">=82.0.0.20260508" },
     { name = "uv", marker = "extra == 'dev'", specifier = ">=0.11.14" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["crypto", "lz4", "all", "dev"]
 
 [[package]]
 name = "pygments"

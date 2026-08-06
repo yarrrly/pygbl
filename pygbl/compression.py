@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import lzma
 
-import lz4.block
+from pygbl.types import MissingDependencyError
+
+try:
+    import lz4.block
+except ImportError:
+    HAVE_LZ4 = False
+else:
+    HAVE_LZ4 = True
 
 # The Gecko bootloader's LZMA decoder is memory constrained. Its probability model needs
 # `4 KiB + 1.5 KiB * (1 << (lc + lp))` of RAM and its dictionary buffer is statically
@@ -59,10 +66,22 @@ def lzma_decompress(data: bytes) -> bytes:
     return lzma.decompress(data, format=lzma.FORMAT_ALONE)
 
 
+def require_lz4() -> None:
+    if not HAVE_LZ4:
+        raise MissingDependencyError(
+            "LZ4 compression needs the `lz4` package."
+            " Install it with `pip install pygbl[lz4]`."
+        )
+
+
 def lz4_compress(data: bytes) -> bytes:
     """Compress into a raw LZ4 block, without a frame header or size prefix."""
+    require_lz4()
+
     return lz4.block.compress(data, store_size=False)
 
 
 def lz4_decompress(data: bytes, *, max_size: int = LZ4_MAX_DECOMPRESSED_SIZE) -> bytes:
+    require_lz4()
+
     return lz4.block.decompress(data, uncompressed_size=max_size)

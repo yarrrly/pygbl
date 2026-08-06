@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import os
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, utils
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from pygbl.types import MissingDependencyError
+
+try:
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+except ImportError:
+    HAVE_CRYPTOGRAPHY = False
+else:
+    HAVE_CRYPTOGRAPHY = True
 
 # The bootloader runs AES-CTR with a CCM-style counter block:
 #   flags (1 byte) || nonce (12 bytes) || counter (3 bytes, big-endian)
@@ -16,6 +23,14 @@ CCM_INITIAL_COUNTER = 1
 NONCE_SIZE = 12
 AES_KEY_SIZE = 16
 SIGNATURE_COMPONENT_SIZE = 32
+
+
+def require_cryptography() -> None:
+    if not HAVE_CRYPTOGRAPHY:
+        raise MissingDependencyError(
+            "Signing and encryption need the `cryptography` package."
+            " Install it with `pip install pygbl[crypto]`."
+        )
 
 
 def generate_nonce() -> bytes:
@@ -33,6 +48,8 @@ def aes_ctr_crypt(
     key: bytes, nonce: bytes, data: bytes, *, counter: int = CCM_INITIAL_COUNTER
 ) -> bytes:
     """Encrypt or decrypt image data. AES-CTR is symmetric, so this does both."""
+    require_cryptography()
+
     if len(key) != AES_KEY_SIZE:
         raise ValueError(f"Key must be {AES_KEY_SIZE} bytes, got {len(key)}")
 
@@ -46,6 +63,8 @@ def sign_digest(
     private_key: ec.EllipticCurvePrivateKey, digest: bytes
 ) -> tuple[bytes, bytes]:
     """Sign a SHA-256 digest, returning the raw `r` and `s` components."""
+    require_cryptography()
+
     signature = private_key.sign(digest, ec.ECDSA(utils.Prehashed(hashes.SHA256())))
     r, s = utils.decode_dss_signature(signature)
 
@@ -58,6 +77,8 @@ def sign_digest(
 def verify_digest(
     public_key: ec.EllipticCurvePublicKey, digest: bytes, r: bytes, s: bytes
 ) -> bool:
+    require_cryptography()
+
     signature = utils.encode_dss_signature(
         int.from_bytes(r, "big"), int.from_bytes(s, "big")
     )

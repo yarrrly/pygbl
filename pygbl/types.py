@@ -18,6 +18,10 @@ class ValidationError(GBLError):
     """An image parsed successfully but is not valid."""
 
 
+class MissingDependencyError(GBLError):
+    """An optional dependency is needed for the requested operation."""
+
+
 def pad_to_multiple(data: bytes, multiple: int, padding: bytes = b"\xff") -> bytes:
     if len(padding) != 1:
         raise ValueError(f"Padding must be a single byte, got {padding!r}")
