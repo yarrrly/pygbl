@@ -34,6 +34,7 @@ from pygbl import (
     read_application_info,
     read_application_properties,
     read_bootloader_version,
+    read_encryption_key,
     read_loadable_segments,
 )
 from pygbl.elf import APP_PROPERTIES_MAGIC
@@ -93,9 +94,7 @@ def is_encrypted(name: str) -> bool:
 PLAIN = [name for name in ELVES if not is_encrypted(name)]
 ENCRYPTED = [name for name in ELVES if is_encrypted(name)]
 
-AES_KEY = bytes.fromhex(
-    (FILES / "zwa2_vendor_encrypt.key").read_text().split(":")[1].strip()
-)
+AES_KEY = read_encryption_key((FILES / "zwa2_vendor_encrypt.key").read_text())
 _KEY = load_pem_private_key(
     (FILES / "zwa2_vendor_sign.key").read_bytes(), password=None
 )

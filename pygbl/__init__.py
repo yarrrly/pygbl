@@ -89,6 +89,7 @@ from pygbl.gbl4 import (
     GBL4UpdateSe,
     HashValue,
 )
+from pygbl.helpers import ENCRYPTION_KEY_TOKEN, read_encryption_key
 from pygbl.types import (
     VALID_CRC32,
     GBLError,
@@ -164,6 +165,7 @@ __all__ = [
     "GBL4UpdateProcess",
     "GBL4UpdateSe",
     "HashValue",
+    "ENCRYPTION_KEY_TOKEN",
     "GBL3ApplicationInfo",
     "GBL3ApplicationType",
     "GBL3Bootloader",
@@ -203,6 +205,7 @@ __all__ = [
     "pad_to_multiple",
     "parse_firmware_image",
     "read_application_info",
+    "read_encryption_key",
     "read_application_properties",
     "read_bootloader_version",
     "read_loadable_segments",
