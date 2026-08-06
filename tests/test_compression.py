@@ -31,8 +31,7 @@ PRODUCT_ID = bytes(range(16))
 PAYLOAD = bytes((i * 3) % 211 for i in range(8192)) + b"\x00" * 4096
 
 
-@pytest.fixture
-def image() -> GBLImage:
+def build_image() -> GBLImage:
     return GBLImage(
         tags=[
             GBLHeader(version=3, type=GBLType.NONE),
@@ -103,11 +102,10 @@ def test_compression_actually_shrinks() -> None:
     ],
 )
 def test_compress_replaces_program_data_tags(
-    image: GBLImage,
     algorithm: GBLCompression,
     tag_type: type[GBLProgramDataLZMA] | type[GBLProgramDataLZ4],
 ) -> None:
-    compressed = image.compress(algorithm)
+    compressed = build_image().compress(algorithm)
 
     assert len(compressed.get_tags(tag_type)) == 2
     assert compressed.get_tags(GBLProgramData2) == []
@@ -115,24 +113,23 @@ def test_compress_replaces_program_data_tags(
 
 
 @pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compress_decompress_roundtrip(
-    image: GBLImage, algorithm: GBLCompression
-) -> None:
+def test_compress_decompress_roundtrip(algorithm: GBLCompression) -> None:
+    image = build_image()
+
     assert image.compress(algorithm).decompress().serialize() == image.serialize()
 
 
 @pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compressed_image_is_valid(image: GBLImage, algorithm: GBLCompression) -> None:
-    compressed = image.compress(algorithm)
+def test_compressed_image_is_valid(algorithm: GBLCompression) -> None:
+    compressed = build_image().compress(algorithm)
     data = compressed.serialize()
 
     assert GBLImage.from_bytes(data) == compressed
 
 
 @pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compress_leaves_other_tags_alone(
-    image: GBLImage, algorithm: GBLCompression
-) -> None:
+def test_compress_leaves_other_tags_alone(algorithm: GBLCompression) -> None:
+    image = build_image()
     compressed = image.compress(algorithm)
 
     assert compressed.get_first_tag(GBLMetadata) == image.get_first_tag(GBLMetadata)
@@ -143,9 +140,9 @@ def test_compress_leaves_other_tags_alone(
     assert compressed.get_first_tag(GBLHeader).type == GBLType.NONE
 
 
-def test_compress_handles_program_data1(image: GBLImage) -> None:
+def test_compress_handles_program_data1() -> None:
     """Both program data tag ids are interchangeable and both compress."""
-    tags = list(image.tags)
+    tags = list(build_image().tags)
     tags[2] = GBLProgramData1(address=0x8006000, data=PAYLOAD)
     variant = GBLImage(tags=tags).regenerate_crc()
 
@@ -155,12 +152,15 @@ def test_compress_handles_program_data1(image: GBLImage) -> None:
     assert len(compressed.get_tags(GBLProgramDataLZMA)) == 2
 
 
-def test_decompress_is_a_noop_on_plain_images(image: GBLImage) -> None:
+def test_decompress_is_a_noop_on_plain_images() -> None:
+    image = build_image()
+
     assert image.decompress().serialize() == image.serialize()
 
 
-def test_compress_then_encrypt_then_sign_roundtrip(image: GBLImage) -> None:
+def test_compress_then_encrypt_then_sign_roundtrip() -> None:
     """The full pipeline `commander` uses for Z-Wave firmware."""
+    image = build_image()
     key = bytes(range(16))
     private_key = ec.generate_private_key(ec.SECP256R1())
 
