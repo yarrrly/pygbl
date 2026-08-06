@@ -49,7 +49,7 @@ def image() -> GBLImage:
     ).regenerate_crc()
 
 
-def test_lzma_props_match_commander():
+def test_lzma_props_match_commander() -> None:
     """`commander` emits lc=1, lp=1, pb=2 with an 8 KiB dictionary: props byte 0x64."""
     compressed = lzma_compress(PAYLOAD)
     props = compressed[0]
@@ -61,7 +61,7 @@ def test_lzma_props_match_commander():
     assert int.from_bytes(compressed[1:5], "little") == LZMA_DICT_SIZE == 8192
 
 
-def test_lzma_records_the_uncompressed_size():
+def test_lzma_records_the_uncompressed_size() -> None:
     """Python writes an unknown-size marker by default; we write the real size."""
     compressed = lzma_compress(PAYLOAD)
     size = int.from_bytes(compressed[LZMA_PROPS_SIZE:LZMA_HEADER_SIZE], "little")
@@ -70,27 +70,27 @@ def test_lzma_records_the_uncompressed_size():
 
 
 @pytest.mark.parametrize("size", [1, 15, 368, 1384, 20000])
-def test_lzma_roundtrip(size: int):
+def test_lzma_roundtrip(size: int) -> None:
     data = bytes((i * 7) % 251 for i in range(size))
 
     assert lzma_decompress(lzma_compress(data)) == data
 
 
 @pytest.mark.parametrize("size", [1, 15, 368, 1384, 20000])
-def test_lz4_roundtrip(size: int):
+def test_lz4_roundtrip(size: int) -> None:
     data = bytes((i * 7) % 251 for i in range(size))
 
     assert lz4_decompress(lz4_compress(data)) == data
 
 
-def test_lz4_emits_a_raw_block():
+def test_lz4_emits_a_raw_block() -> None:
     """No frame magic: the bootloader reads raw LZ4 blocks."""
     compressed = lz4_compress(PAYLOAD)
 
     assert not compressed.startswith(bytes.fromhex("04224d18"))
 
 
-def test_compression_actually_shrinks():
+def test_compression_actually_shrinks() -> None:
     assert len(lzma_compress(PAYLOAD)) < len(PAYLOAD)
     assert len(lz4_compress(PAYLOAD)) < len(PAYLOAD)
 
@@ -102,7 +102,11 @@ def test_compression_actually_shrinks():
         (GBLCompression.LZ4, GBLProgramDataLZ4),
     ],
 )
-def test_compress_replaces_program_data_tags(image, algorithm, tag_type):
+def test_compress_replaces_program_data_tags(
+    image: GBLImage,
+    algorithm: GBLCompression,
+    tag_type: type[GBLProgramDataLZMA] | type[GBLProgramDataLZ4],
+) -> None:
     compressed = image.compress(algorithm)
 
     assert len(compressed.get_tags(tag_type)) == 2
@@ -111,12 +115,14 @@ def test_compress_replaces_program_data_tags(image, algorithm, tag_type):
 
 
 @pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compress_decompress_roundtrip(image, algorithm):
+def test_compress_decompress_roundtrip(
+    image: GBLImage, algorithm: GBLCompression
+) -> None:
     assert image.compress(algorithm).decompress().serialize() == image.serialize()
 
 
 @pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compressed_image_is_valid(image, algorithm):
+def test_compressed_image_is_valid(image: GBLImage, algorithm: GBLCompression) -> None:
     compressed = image.compress(algorithm)
     data = compressed.serialize()
 
@@ -124,7 +130,9 @@ def test_compressed_image_is_valid(image, algorithm):
 
 
 @pytest.mark.parametrize("algorithm", list(GBLCompression))
-def test_compress_leaves_other_tags_alone(image, algorithm):
+def test_compress_leaves_other_tags_alone(
+    image: GBLImage, algorithm: GBLCompression
+) -> None:
     compressed = image.compress(algorithm)
 
     assert compressed.get_first_tag(GBLMetadata) == image.get_first_tag(GBLMetadata)
@@ -135,7 +143,7 @@ def test_compress_leaves_other_tags_alone(image, algorithm):
     assert compressed.get_first_tag(GBLHeader).type == GBLType.NONE
 
 
-def test_compress_handles_program_data1(image):
+def test_compress_handles_program_data1(image: GBLImage) -> None:
     """Both program data tag ids are interchangeable and both compress."""
     tags = list(image.tags)
     tags[2] = GBLProgramData1(address=0x8006000, data=PAYLOAD)
@@ -147,11 +155,11 @@ def test_compress_handles_program_data1(image):
     assert len(compressed.get_tags(GBLProgramDataLZMA)) == 2
 
 
-def test_decompress_is_a_noop_on_plain_images(image):
+def test_decompress_is_a_noop_on_plain_images(image: GBLImage) -> None:
     assert image.decompress().serialize() == image.serialize()
 
 
-def test_compress_then_encrypt_then_sign_roundtrip(image):
+def test_compress_then_encrypt_then_sign_roundtrip(image: GBLImage) -> None:
     """The full pipeline `commander` uses for Z-Wave firmware."""
     key = bytes(range(16))
     private_key = ec.generate_private_key(ec.SECP256R1())

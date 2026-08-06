@@ -45,6 +45,8 @@ log_date_format = "%Y-%m-%d %H:%M:%S"
 
 [tool.mypy]
 python_version = "3.11"
+# python-lz4 is a C extension and ships no type information, so we stub what we use
+mypy_path = "stubs"
 strict = true
 check_untyped_defs = true
 show_error_codes = true
@@ -58,7 +60,6 @@ module = ["tests.*"]
 disable_error_code = [
   "abstract",
   "no-untyped-call",
-  "no-untyped-def",
   "redundant-expr",
   "unreachable",
   "untyped-decorator",

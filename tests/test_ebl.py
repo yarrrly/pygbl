@@ -12,6 +12,7 @@ from pygbl import (
     EBLHeader,
     EBLImage,
     EBLProgram,
+    EBLTagBase,
     EBLTagId,
     EBLUnknownTag,
     ParseError,
@@ -29,11 +30,11 @@ HEADER = EBLHeader(
 )
 
 
-def build(*tags, trailing_data: bytes = b"") -> EBLImage:
+def build(*tags: EBLTagBase, trailing_data: bytes = b"") -> EBLImage:
     return EBLImage(tags=[HEADER, *tags], trailing_data=trailing_data).regenerate_crc()
 
 
-def test_build_and_reparse():
+def test_build_and_reparse() -> None:
     image = build(EBLEraseProgram(address=0x08004080, data=b"\xab" * 32))
     data = image.serialize()
 
@@ -41,14 +42,14 @@ def test_build_and_reparse():
     assert zlib.crc32(data) == VALID_CRC32
 
 
-def test_magic_matches_header_tag_and_length():
+def test_magic_matches_header_tag_and_length() -> None:
     data = build().serialize()
 
     # tag 0x0000 followed by the fixed 140 byte header length, both big-endian
     assert data[0:4] == b"\x00\x00\x00\x8c"
 
 
-def test_tag_framing_is_big_endian():
+def test_tag_framing_is_big_endian() -> None:
     image = build(EBLEraseProgram(address=0x08004080, data=b"\x01\x02"))
     data = image.serialize()
     offset = 4 + 140
@@ -58,7 +59,7 @@ def test_tag_framing_is_big_endian():
     assert data[offset + 4 : offset + 8] == (0x08004080).to_bytes(4, "big")
 
 
-def test_header_fields_are_big_endian():
+def test_header_fields_are_big_endian() -> None:
     payload = HEADER.serialize_payload()
 
     assert len(payload) == 140
@@ -68,7 +69,7 @@ def test_header_fields_are_big_endian():
     assert EBLHeader.from_payload(payload) == HEADER
 
 
-def test_end_tag_crc_is_little_endian():
+def test_end_tag_crc_is_little_endian() -> None:
     """Every other EBL field is big-endian, but the end tag's CRC is not."""
     image = build(EBLEraseProgram(address=0, data=b"\x00" * 8))
     data = image.serialize()
@@ -78,7 +79,7 @@ def test_end_tag_crc_is_little_endian():
     assert EBLEnd.from_payload(data[-4:]).crc == crc
 
 
-def test_eraseprogram_addresses_are_contiguous():
+def test_eraseprogram_addresses_are_contiguous() -> None:
     """Mirrors how real images chain program tags."""
     first = EBLEraseProgram(address=0x08004080, data=b"\x00" * 0x780)
     second = EBLEraseProgram(address=0x08004800, data=b"\x00" * 0x800)
@@ -89,7 +90,7 @@ def test_eraseprogram_addresses_are_contiguous():
     assert tags[0].address + len(tags[0].data) == tags[1].address
 
 
-def test_program_and_eraseprogram_are_distinct_tags():
+def test_program_and_eraseprogram_are_distinct_tags() -> None:
     image = build(
         EBLProgram(address=0, data=b"\x01"),
         EBLEraseProgram(address=4, data=b"\x02"),
@@ -103,7 +104,7 @@ def test_program_and_eraseprogram_are_distinct_tags():
 @pytest.mark.parametrize(
     "trailing", [b"", b"\xff" * 20, b"\x00" * 8, b"vendor payload"]
 )
-def test_trailing_data_roundtrips(trailing: bytes):
+def test_trailing_data_roundtrips(trailing: bytes) -> None:
     image = build(EBLEraseProgram(address=0, data=b"\x01"), trailing_data=trailing)
     data = image.serialize()
 
@@ -112,7 +113,7 @@ def test_trailing_data_roundtrips(trailing: bytes):
     assert EBLImage.from_bytes(data).trailing_data == trailing
 
 
-def test_unaligned_image_is_accepted():
+def test_unaligned_image_is_accepted() -> None:
     """Real images append vendor payloads that break 64 byte alignment."""
     image = build(EBLEraseProgram(address=0, data=b"\x01"), trailing_data=b"\xa5" * 3)
     data = image.serialize()
@@ -122,7 +123,7 @@ def test_unaligned_image_is_accepted():
     EBLImage.from_bytes(data).validate()
 
 
-def test_block_padding_to_ebl_alignment():
+def test_block_padding_to_ebl_alignment() -> None:
     image = build(EBLEraseProgram(address=0, data=b"\x01"))
     padded = image.serialize(block_size=EBL_BLOCK_SIZE)
 
@@ -130,7 +131,7 @@ def test_block_padding_to_ebl_alignment():
     assert padded.startswith(image.serialize())
 
 
-def test_unknown_tag_is_preserved():
+def test_unknown_tag_is_preserved() -> None:
     unknown = EBLUnknownTag(tag_id=0xABCD, payload=b"\x01\x02")
     image = build(unknown)
     data = image.serialize()
@@ -139,7 +140,7 @@ def test_unknown_tag_is_preserved():
     assert EBLImage.from_bytes(data).serialize() == data
 
 
-def test_bad_crc_rejected():
+def test_bad_crc_rejected() -> None:
     data = bytearray(build(EBLEraseProgram(address=0, data=b"\x01")).serialize())
     data[-1] ^= 0xFF
 
@@ -149,19 +150,19 @@ def test_bad_crc_rejected():
     EBLImage.from_bytes(bytes(data), validate=False)
 
 
-def test_truncated_tag_payload():
+def test_truncated_tag_payload() -> None:
     with pytest.raises(ParseError, match="is truncated"):
         EBLImage.from_bytes(b"\x00\x00\x00\x8c" + b"\x00" * 4)
 
 
-def test_missing_end_tag_rejected():
+def test_missing_end_tag_rejected() -> None:
     image = EBLImage(tags=[HEADER])
 
     with pytest.raises(ValidationError, match="Last tag must be the end tag"):
         image.validate()
 
 
-def test_parse_firmware_image_dispatches():
+def test_parse_firmware_image_dispatches() -> None:
     data = build(EBLEraseProgram(address=0, data=b"\x01")).serialize()
 
     assert isinstance(parse_firmware_image(data), EBLImage)

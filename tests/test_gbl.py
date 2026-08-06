@@ -17,6 +17,7 @@ from pygbl import (
     GBLMetadata,
     GBLProgramData2,
     GBLSignature,
+    GBLTagBase,
     GBLTagId,
     GBLType,
     GBLUnknownTag,
@@ -28,7 +29,9 @@ from pygbl import (
 PRODUCT_ID = bytes(range(16))
 
 
-def build(*tags, trailing_data: bytes = b"", type: GBLType = GBLType.NONE) -> GBLImage:
+def build(
+    *tags: GBLTagBase, trailing_data: bytes = b"", type: GBLType = GBLType.NONE
+) -> GBLImage:
     return GBLImage(
         tags=[GBLHeader(version=3, type=type), *tags],
         trailing_data=trailing_data,
@@ -41,7 +44,7 @@ def app_info(app_type: GBLApplicationType) -> GBLApplicationInfo:
     )
 
 
-def test_build_and_reparse():
+def test_build_and_reparse() -> None:
     image = build(
         app_info(GBLApplicationType.ZIGBEE),
         GBLProgramData2(address=0x1000, data=b"\xab" * 16),
@@ -52,7 +55,7 @@ def test_build_and_reparse():
     assert zlib.crc32(data) == VALID_CRC32
 
 
-def test_header_endianness():
+def test_header_endianness() -> None:
     """The version is big-endian while the type flags are little-endian."""
     image = build()
     payload = image.serialize()[8:16]
@@ -61,7 +64,7 @@ def test_header_endianness():
     assert GBLHeader.from_payload(payload).version == 3
 
 
-def test_tag_framing():
+def test_tag_framing() -> None:
     image = build(GBLMetadata(metadata=b"hello"))
     data = image.serialize()
 
@@ -72,7 +75,7 @@ def test_tag_framing():
     assert data[20:24] == (5).to_bytes(4, "little")
 
 
-def test_signature_is_64_bytes():
+def test_signature_is_64_bytes() -> None:
     signature = GBLSignature(r=bytes(range(32)), s=bytes(range(32, 64)))
     payload = signature.serialize_payload()
 
@@ -83,7 +86,7 @@ def test_signature_is_64_bytes():
         GBLSignature.from_payload(payload[:8])
 
 
-def test_encryption_init_is_structured():
+def test_encryption_init_is_structured() -> None:
     tag = GBLEncryptionInitAesCcm(msg_len=0x1234, nonce=bytes(range(12)))
     payload = tag.serialize_payload()
 
@@ -92,7 +95,7 @@ def test_encryption_init_is_structured():
     assert GBLEncryptionInitAesCcm.from_payload(payload) == tag
 
 
-def test_encrypted_payload_stays_opaque():
+def test_encrypted_payload_stays_opaque() -> None:
     image = build(
         GBLEncryptionInitAesCcm(msg_len=4, nonce=bytes(12)),
         GBLEncryptedData(ciphertext=b"\xde\xad\xbe\xef"),
@@ -105,7 +108,7 @@ def test_encrypted_payload_stays_opaque():
     assert reparsed.get_first_tag(GBLHeader).type == GBLType.ENCRYPTION_AESCCM
 
 
-def test_unknown_tag_is_preserved():
+def test_unknown_tag_is_preserved() -> None:
     unknown = GBLUnknownTag(tag_id=0x12345678, payload=b"\x01\x02\x03")
     image = build(unknown)
     data = image.serialize()
@@ -115,7 +118,7 @@ def test_unknown_tag_is_preserved():
     assert reparsed.serialize() == data
 
 
-def test_unknown_header_flags_are_preserved():
+def test_unknown_header_flags_are_preserved() -> None:
     image = build(type=GBLType(0x00008001))
     data = image.serialize()
 
@@ -126,7 +129,7 @@ def test_unknown_header_flags_are_preserved():
 @pytest.mark.parametrize(
     "trailing", [b"", b"\xff", b"\xff\xff\xff", b"\x00\x00", b"vendor payload"]
 )
-def test_trailing_data_roundtrips(trailing: bytes):
+def test_trailing_data_roundtrips(trailing: bytes) -> None:
     image = build(GBLMetadata(metadata=b"{}"), trailing_data=trailing)
     data = image.serialize()
 
@@ -135,7 +138,7 @@ def test_trailing_data_roundtrips(trailing: bytes):
     assert GBLImage.from_bytes(data).trailing_data == trailing
 
 
-def test_trailing_data_is_outside_the_crc():
+def test_trailing_data_is_outside_the_crc() -> None:
     tags = [GBLHeader(version=3, type=GBLType.NONE), GBLMetadata(metadata=b"{}")]
     without = GBLImage(tags=tags).regenerate_crc()
     with_trailing = GBLImage(tags=tags, trailing_data=b"\xff" * 64).regenerate_crc()
@@ -144,7 +147,7 @@ def test_trailing_data_is_outside_the_crc():
     with_trailing.validate()
 
 
-def test_block_size_padding():
+def test_block_size_padding() -> None:
     image = build(GBLProgramData2(address=0, data=b"\x00" * 3))
 
     assert len(image.serialize(block_size=128)) % 128 == 0
@@ -153,7 +156,7 @@ def test_block_size_padding():
     assert image.serialize(block_size=128, padding=b"\x00").endswith(b"\x00")
 
 
-def test_bad_crc_rejected():
+def test_bad_crc_rejected() -> None:
     data = bytearray(build(GBLMetadata(metadata=b"{}")).serialize())
     data[-1] ^= 0xFF
 
@@ -164,31 +167,31 @@ def test_bad_crc_rejected():
     GBLImage.from_bytes(bytes(data), validate=False)
 
 
-def test_truncated_tag_header():
+def test_truncated_tag_header() -> None:
     with pytest.raises(ParseError, match="incomplete tag header"):
         GBLImage.from_bytes(b"\xeb\x17\xa6\x03\x08\x00")
 
 
-def test_truncated_tag_payload():
+def test_truncated_tag_payload() -> None:
     with pytest.raises(ParseError, match="is truncated"):
         GBLImage.from_bytes(b"\xeb\x17\xa6\x03" + (999).to_bytes(4, "little") + b"\x00")
 
 
-def test_missing_header_rejected():
+def test_missing_header_rejected() -> None:
     image = GBLImage(tags=[GBLMetadata(metadata=b"{}")]).regenerate_crc()
 
     with pytest.raises(ValidationError, match="First tag must be the header"):
         image.validate()
 
 
-def test_metadata_is_opaque_bytes():
+def test_metadata_is_opaque_bytes() -> None:
     image = build(GBLMetadata(metadata=b'{"not": "parsed"}'))
 
     assert image.get_metadata() == b'{"not": "parsed"}'
     assert build().get_metadata() is None
 
 
-def test_tag_lookup_helpers():
+def test_tag_lookup_helpers() -> None:
     first = GBLProgramData2(address=0, data=b"\x01")
     second = GBLProgramData2(address=4, data=b"\x02")
     image = build(first, second)
@@ -203,7 +206,7 @@ def test_tag_lookup_helpers():
         image.get_first_tag(GBLMetadata)
 
 
-def test_bootloader_version():
+def test_bootloader_version() -> None:
     version = BootloaderVersion.from_int(0x02040008)
 
     assert (version.major, version.minor, version.customer) == (2, 4, 8)
@@ -211,12 +214,12 @@ def test_bootloader_version():
     assert version.as_int() == 0x02040008
 
 
-def test_parse_firmware_image_rejects_unknown():
+def test_parse_firmware_image_rejects_unknown() -> None:
     with pytest.raises(ParseError, match="neither a GBL nor an EBL"):
         parse_firmware_image(b"not a firmware image")
 
 
-def test_parse_firmware_image_dispatches():
+def test_parse_firmware_image_dispatches() -> None:
     data = build(GBLMetadata(metadata=b"{}")).serialize()
 
     assert isinstance(parse_firmware_image(data), GBLImage)

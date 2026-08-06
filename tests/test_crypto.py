@@ -56,7 +56,7 @@ def image() -> GBLImage:
     ).regenerate_crc()
 
 
-def test_counter_block_layout():
+def test_counter_block_layout() -> None:
     """flags (1) || nonce (12) || counter (3, big-endian), counter starting at 1."""
     assert counter_block(NONCE) == bytes([CCM_FLAGS]) + NONCE + b"\x00\x00\x01"
     assert (
@@ -66,12 +66,12 @@ def test_counter_block_layout():
     assert CCM_INITIAL_COUNTER == 1
 
 
-def test_counter_block_rejects_bad_nonce():
+def test_counter_block_rejects_bad_nonce() -> None:
     with pytest.raises(ValueError, match="Nonce must be 12 bytes"):
         counter_block(b"\x00" * 8)
 
 
-def test_aes_ctr_known_answer():
+def test_aes_ctr_known_answer() -> None:
     """Vector lifted from a `commander --encrypt` image: nonce, key and first tag."""
     key = bytes.fromhex("7f8fe53979b31bc556fcb131aff42414")
     nonce = bytes.fromhex("9f939baad06c1ccfdc8d3347")
@@ -80,23 +80,25 @@ def test_aes_ctr_known_answer():
     assert aes_ctr_crypt(key, nonce, plaintext) == bytes.fromhex("db4a1006bd2bc839")
 
 
-def test_aes_ctr_is_symmetric():
+def test_aes_ctr_is_symmetric() -> None:
     data = bytes(range(256))
 
     assert aes_ctr_crypt(KEY, NONCE, aes_ctr_crypt(KEY, NONCE, data)) == data
 
 
-def test_aes_ctr_rejects_bad_key():
+def test_aes_ctr_rejects_bad_key() -> None:
     with pytest.raises(ValueError, match="Key must be 16 bytes"):
         aes_ctr_crypt(b"\x00" * 8, NONCE, b"data")
 
 
-def test_generate_nonce():
+def test_generate_nonce() -> None:
     assert len(generate_nonce()) == 12
     assert generate_nonce() != generate_nonce()
 
 
-def test_sign_and_verify(image, private_key):
+def test_sign_and_verify(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     signed = image.sign(private_key)
 
     assert signed.verify_signature(private_key.public_key())
@@ -104,13 +106,17 @@ def test_sign_and_verify(image, private_key):
     assert len(signed.get_first_tag(GBLSignature).s) == 32
 
 
-def test_signing_sets_header_flag(image, private_key):
+def test_signing_sets_header_flag(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     signed = image.sign(private_key)
 
     assert GBLType.SIGNATURE_ECDSA_P256 in signed.get_first_tag(GBLHeader).type
 
 
-def test_signed_image_is_valid_and_reparses(image, private_key):
+def test_signed_image_is_valid_and_reparses(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     signed = image.sign(private_key)
     data = signed.serialize()
 
@@ -118,7 +124,9 @@ def test_signed_image_is_valid_and_reparses(image, private_key):
     assert GBLImage.from_bytes(data).verify_signature(private_key.public_key())
 
 
-def test_signing_digest_excludes_signature_and_end(image, private_key):
+def test_signing_digest_excludes_signature_and_end(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     """The bootloader hashes every tag except the signature and end tags."""
     signed = image.sign(private_key)
     expected = hashlib.sha256(
@@ -132,7 +140,9 @@ def test_signing_digest_excludes_signature_and_end(image, private_key):
     assert signed.signing_digest() == expected
 
 
-def test_verify_rejects_corrupted_signature(image, private_key):
+def test_verify_rejects_corrupted_signature(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     signed = image.sign(private_key)
     signature = signed.get_first_tag(GBLSignature)
     corrupted = bytearray(signature.r)
@@ -147,7 +157,9 @@ def test_verify_rejects_corrupted_signature(image, private_key):
     assert not tampered.verify_signature(private_key.public_key())
 
 
-def test_verify_rejects_tampered_payload(image, private_key):
+def test_verify_rejects_tampered_payload(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     signed = image.sign(private_key)
     program = signed.get_first_tag(GBLProgramData2)
     data = bytearray(program.data)
@@ -161,19 +173,25 @@ def test_verify_rejects_tampered_payload(image, private_key):
     assert not tampered.verify_signature(private_key.public_key())
 
 
-def test_verify_rejects_wrong_key(image, private_key):
+def test_verify_rejects_wrong_key(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     signed = image.sign(private_key)
     other_key = ec.generate_private_key(ec.SECP256R1())
 
     assert not signed.verify_signature(other_key.public_key())
 
 
-def test_verify_unsigned_image_raises(image, private_key):
+def test_verify_unsigned_image_raises(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     with pytest.raises(KeyError, match="not signed"):
         image.verify_signature(private_key.public_key())
 
 
-def test_signing_is_stable_across_reparse(image, private_key):
+def test_signing_is_stable_across_reparse(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     """Re-signing an already signed image replaces the signature rather than stacking."""
     signed = image.sign(private_key).sign(private_key)
 
@@ -181,13 +199,13 @@ def test_signing_is_stable_across_reparse(image, private_key):
     assert signed.verify_signature(private_key.public_key())
 
 
-def test_encrypt_and_decrypt(image):
+def test_encrypt_and_decrypt(image: GBLImage) -> None:
     encrypted = image.encrypt(KEY, nonce=NONCE)
 
     assert encrypted.decrypt(KEY).serialize() == image.serialize()
 
 
-def test_encrypt_sets_header_flag_and_init_tag(image):
+def test_encrypt_sets_header_flag_and_init_tag(image: GBLImage) -> None:
     encrypted = image.encrypt(KEY, nonce=NONCE)
     init = encrypted.get_first_tag(GBLEncryptionInitAesCcm)
 
@@ -198,7 +216,7 @@ def test_encrypt_sets_header_flag_and_init_tag(image):
     )
 
 
-def test_encrypt_wraps_each_tag_separately(image):
+def test_encrypt_wraps_each_tag_separately(image: GBLImage) -> None:
     encrypted = image.encrypt(KEY, nonce=NONCE)
     plaintext_tags = [
         t for t in image.tags if not isinstance(t, (GBLHeader, GBLEnd, GBLSignature))
@@ -211,7 +229,7 @@ def test_encrypt_wraps_each_tag_separately(image):
     ]
 
 
-def test_encrypted_keystream_is_continuous(image):
+def test_encrypted_keystream_is_continuous(image: GBLImage) -> None:
     """One continuous keystream spans all encrypted tags, so they cannot be reordered."""
     encrypted = image.encrypt(KEY, nonce=NONCE)
     ciphertext = b"".join(t.ciphertext for t in encrypted.get_tags(GBLEncryptedData))
@@ -224,24 +242,26 @@ def test_encrypted_keystream_is_continuous(image):
     assert aes_ctr_crypt(KEY, NONCE, plaintext) == ciphertext
 
 
-def test_encrypt_uses_a_random_nonce_by_default(image):
+def test_encrypt_uses_a_random_nonce_by_default(image: GBLImage) -> None:
     first = image.encrypt(KEY).get_first_tag(GBLEncryptionInitAesCcm)
     second = image.encrypt(KEY).get_first_tag(GBLEncryptionInitAesCcm)
 
     assert first.nonce != second.nonce
 
 
-def test_double_encryption_rejected(image):
+def test_double_encryption_rejected(image: GBLImage) -> None:
     with pytest.raises(ValueError, match="already encrypted"):
         image.encrypt(KEY, nonce=NONCE).encrypt(KEY, nonce=NONCE)
 
 
-def test_decrypt_unencrypted_image_raises(image):
+def test_decrypt_unencrypted_image_raises(image: GBLImage) -> None:
     with pytest.raises(KeyError, match="not encrypted"):
         image.decrypt(KEY)
 
 
-def test_encrypt_then_sign(image, private_key):
+def test_encrypt_then_sign(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     """`commander` signs the ciphertext, so the signature survives on the sealed image."""
     sealed = image.encrypt(KEY, nonce=NONCE).sign(private_key)
 
@@ -252,7 +272,9 @@ def test_encrypt_then_sign(image, private_key):
     assert GBLImage.from_bytes(sealed.serialize()) == sealed
 
 
-def test_decrypt_drops_signature_and_flags(image, private_key):
+def test_decrypt_drops_signature_and_flags(
+    image: GBLImage, private_key: ec.EllipticCurvePrivateKey
+) -> None:
     sealed = image.encrypt(KEY, nonce=NONCE).sign(private_key)
     decrypted = sealed.decrypt(KEY)
 

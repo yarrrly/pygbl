@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-from typing import Any, ClassVar, Self, Union
+from typing import Any, Self, Union
 import zlib
 
 from pygbl.types import (
@@ -35,9 +35,23 @@ class EBLTagId(enum.IntEnum):
     ENC_MAC = 0xF709
 
 
-@dataclasses.dataclass(frozen=True)
-class EBLHeader:
-    tag_id: ClassVar[EBLTagId] = EBLTagId.HEADER
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class EBLTagBase:
+    """Everything the container needs from a tag: an identifier and a payload encoder.
+
+    Concrete tags default `tag_id` to their own identifier; unrecognized tags carry
+    theirs as ordinary data.
+    """
+
+    tag_id: int
+
+    def serialize_payload(self) -> bytes:
+        raise NotImplementedError
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class EBLHeader(EBLTagBase):
+    tag_id: int = EBLTagId.HEADER
 
     version: int
     signature: int
@@ -69,12 +83,10 @@ class EBLHeader:
         )
 
 
-@dataclasses.dataclass(frozen=True)
-class _EBLAddressedData:
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class _EBLAddressedData(EBLTagBase):
     address: int
     data: bytes
-
-    tag_id: ClassVar[EBLTagId]
 
     @classmethod
     def from_payload(cls, payload: bytes) -> Self:
@@ -82,6 +94,7 @@ class _EBLAddressedData:
             raise ParseError(f"{cls.__name__} is truncated: {len(payload)} bytes")
 
         return cls(
+            tag_id=cls.tag_id,
             address=int.from_bytes(payload[0:4], "big"),
             data=payload[4:],
         )
@@ -90,58 +103,56 @@ class _EBLAddressedData:
         return self.address.to_bytes(4, "big") + self.data
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class EBLProgram(_EBLAddressedData):
-    tag_id: ClassVar[EBLTagId] = EBLTagId.PROG
+    tag_id: int = EBLTagId.PROG
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class EBLManufacturingProgram(_EBLAddressedData):
-    tag_id: ClassVar[EBLTagId] = EBLTagId.MFGPROG
+    tag_id: int = EBLTagId.MFGPROG
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class EBLEraseProgram(_EBLAddressedData):
-    tag_id: ClassVar[EBLTagId] = EBLTagId.ERASEPROG
+    tag_id: int = EBLTagId.ERASEPROG
 
 
-@dataclasses.dataclass(frozen=True)
-class _EBLOpaqueData:
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class _EBLOpaqueData(EBLTagBase):
     data: bytes
-
-    tag_id: ClassVar[EBLTagId]
 
     @classmethod
     def from_payload(cls, payload: bytes) -> Self:
-        return cls(data=payload)
+        return cls(tag_id=cls.tag_id, data=payload)
 
     def serialize_payload(self) -> bytes:
         return self.data
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class EBLEncryptionHeader(_EBLOpaqueData):
-    tag_id: ClassVar[EBLTagId] = EBLTagId.ENC_HEADER
+    tag_id: int = EBLTagId.ENC_HEADER
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class EBLEncryptionInit(_EBLOpaqueData):
-    tag_id: ClassVar[EBLTagId] = EBLTagId.ENC_INIT
+    tag_id: int = EBLTagId.ENC_INIT
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class EBLEncryptedData(_EBLOpaqueData):
-    tag_id: ClassVar[EBLTagId] = EBLTagId.ENC_EBL_DATA
+    tag_id: int = EBLTagId.ENC_EBL_DATA
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class EBLEncryptionMac(_EBLOpaqueData):
-    tag_id: ClassVar[EBLTagId] = EBLTagId.ENC_MAC
+    tag_id: int = EBLTagId.ENC_MAC
 
 
-@dataclasses.dataclass(frozen=True)
-class EBLEnd:
-    tag_id: ClassVar[EBLTagId] = EBLTagId.END
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class EBLEnd(EBLTagBase):
+    tag_id: int = EBLTagId.END
 
     # Unlike every other EBL field, the end tag's CRC is little-endian
     crc: int
@@ -156,8 +167,8 @@ class EBLEnd:
         return self.crc.to_bytes(4, "little")
 
 
-@dataclasses.dataclass(frozen=True)
-class EBLUnknownTag:
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class EBLUnknownTag(EBLTagBase):
     """A tag whose identifier is not recognized. Preserved verbatim."""
 
     tag_id: int
@@ -195,7 +206,7 @@ EBL_TAG_CLASSES: dict[EBLTagId, Any] = {
 PROGRAM_DATA_TAGS = (EBLProgram, EBLManufacturingProgram, EBLEraseProgram)
 
 
-def serialize_tag(tag: EBLTag) -> bytes:
+def serialize_tag(tag: EBLTagBase) -> bytes:
     """Serialize a single tag, header included, exactly as it appears on the wire."""
     payload = tag.serialize_payload()
 
@@ -206,7 +217,7 @@ def serialize_tag(tag: EBLTag) -> bytes:
 
 @dataclasses.dataclass(frozen=True)
 class EBLImage:
-    tags: list[EBLTag]
+    tags: list[EBLTagBase]
 
     # Bytes following the end tag: the padding that aligns the image to a 64 byte
     # boundary, and for some vendors an entire second firmware payload appended after
@@ -217,7 +228,7 @@ class EBLImage:
     @classmethod
     def from_bytes(cls, data: bytes, *, validate: bool = True) -> EBLImage:
         data = bytes(data)
-        tags: list[EBLTag] = []
+        tags: list[EBLTagBase] = []
         offset = 0
 
         while True:
@@ -302,12 +313,12 @@ class EBLImage:
         )
 
 
-def _parse_tag(tag_id: int, payload: bytes) -> EBLTag:
+def _parse_tag(tag_id: int, payload: bytes) -> EBLTagBase:
     try:
         known_tag_id = EBLTagId(tag_id)
     except ValueError:
         return EBLUnknownTag(tag_id=tag_id, payload=payload)
 
-    parsed: EBLTag = EBL_TAG_CLASSES[known_tag_id].from_payload(payload)
+    parsed: EBLTagBase = EBL_TAG_CLASSES[known_tag_id].from_payload(payload)
 
     return parsed

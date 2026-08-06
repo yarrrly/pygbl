@@ -61,12 +61,8 @@ def lzma_decompress(data: bytes) -> bytes:
 
 def lz4_compress(data: bytes) -> bytes:
     """Compress into a raw LZ4 block, without a frame header or size prefix."""
-    compressed: bytes = lz4.block.compress(data, store_size=False)
-
-    return compressed
+    return lz4.block.compress(data, store_size=False)
 
 
 def lz4_decompress(data: bytes, *, max_size: int = LZ4_MAX_DECOMPRESSED_SIZE) -> bytes:
-    decompressed: bytes = lz4.block.decompress(data, uncompressed_size=max_size)
-
-    return decompressed
+    return lz4.block.decompress(data, uncompressed_size=max_size)

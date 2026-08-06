@@ -4,7 +4,7 @@ from collections.abc import Callable
 import dataclasses
 import enum
 import hashlib
-from typing import Any, ClassVar, Self, Union
+from typing import Any, Self, Union
 import zlib
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -110,9 +110,23 @@ class BootloaderVersion:
         return f"{self.major}.{self.minor}.{self.customer}"
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLHeader:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.HEADER
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLTagBase:
+    """Everything the container needs from a tag: an identifier and a payload encoder.
+
+    Concrete tags default `tag_id` to their own identifier; unrecognized tags carry
+    theirs as ordinary data.
+    """
+
+    tag_id: int
+
+    def serialize_payload(self) -> bytes:
+        raise NotImplementedError
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLHeader(GBLTagBase):
+    tag_id: int = GBLTagId.HEADER
 
     # The spec encodes GBL v3 as `0x03000000`. It is read big-endian so that the value
     # matches the human-readable specification version.
@@ -132,9 +146,9 @@ class GBLHeader:
         return self.version.to_bytes(4, "big") + int(self.type).to_bytes(4, "little")
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLApplicationInfo:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.APP_INFO
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLApplicationInfo(GBLTagBase):
+    tag_id: int = GBLTagId.APP_INFO
 
     type: GBLApplicationType
     version: int
@@ -163,9 +177,9 @@ class GBLApplicationInfo:
         )
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLSeUpgrade:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.SE_UPGRADE
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLSeUpgrade(GBLTagBase):
+    tag_id: int = GBLTagId.SE_UPGRADE
 
     blob_size: int
     version: int
@@ -190,9 +204,9 @@ class GBLSeUpgrade:
         )
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLBootloader:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.BOOTLOADER
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLBootloader(GBLTagBase):
+    tag_id: int = GBLTagId.BOOTLOADER
 
     version: BootloaderVersion
     address: int
@@ -217,12 +231,10 @@ class GBLBootloader:
         )
 
 
-@dataclasses.dataclass(frozen=True)
-class _GBLAddressedData:
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class _GBLAddressedData(GBLTagBase):
     address: int
     data: bytes
-
-    tag_id: ClassVar[GBLTagId]
 
     @classmethod
     def from_payload(cls, payload: bytes) -> Self:
@@ -230,6 +242,7 @@ class _GBLAddressedData:
             raise ParseError(f"{cls.__name__} is truncated: {len(payload)} bytes")
 
         return cls(
+            tag_id=cls.tag_id,
             address=int.from_bytes(payload[0:4], "little"),
             data=payload[4:],
         )
@@ -238,29 +251,29 @@ class _GBLAddressedData:
         return self.address.to_bytes(4, "little") + self.data
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class GBLProgramData1(_GBLAddressedData):
-    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA1
+    tag_id: int = GBLTagId.PROGRAM_DATA1
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class GBLProgramData2(_GBLAddressedData):
-    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA2
+    tag_id: int = GBLTagId.PROGRAM_DATA2
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class GBLProgramDataLZ4(_GBLAddressedData):
-    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA_LZ4
+    tag_id: int = GBLTagId.PROGRAM_DATA_LZ4
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class GBLProgramDataLZMA(_GBLAddressedData):
-    tag_id: ClassVar[GBLTagId] = GBLTagId.PROGRAM_DATA_LZMA
+    tag_id: int = GBLTagId.PROGRAM_DATA_LZMA
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLMetadata:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.METADATA
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLMetadata(GBLTagBase):
+    tag_id: int = GBLTagId.METADATA
 
     metadata: bytes
 
@@ -272,9 +285,9 @@ class GBLMetadata:
         return self.metadata
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLSignature:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.SIGNATURE
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLSignature(GBLTagBase):
+    tag_id: int = GBLTagId.SIGNATURE
 
     r: bytes
     s: bytes
@@ -292,23 +305,23 @@ class GBLSignature:
         return self.r + self.s
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLEncryptionHeader:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.ENC_HEADER
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLEncryptionHeader(GBLTagBase):
+    tag_id: int = GBLTagId.ENC_HEADER
 
     data: bytes
 
     @classmethod
     def from_payload(cls, payload: bytes) -> GBLEncryptionHeader:
-        return cls(data=payload)
+        return cls(tag_id=cls.tag_id, data=payload)
 
     def serialize_payload(self) -> bytes:
         return self.data
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLEncryptionInitAesCcm:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.ENC_INIT
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLEncryptionInitAesCcm(GBLTagBase):
+    tag_id: int = GBLTagId.ENC_INIT
 
     msg_len: int
     nonce: bytes
@@ -328,11 +341,11 @@ class GBLEncryptionInitAesCcm:
         return self.msg_len.to_bytes(4, "little") + self.nonce
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLEncryptedData:
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLEncryptedData(GBLTagBase):
     """AES-CCM ciphertext wrapping the plaintext tags. Not decrypted by this library."""
 
-    tag_id: ClassVar[GBLTagId] = GBLTagId.ENC_GBL_DATA
+    tag_id: int = GBLTagId.ENC_GBL_DATA
 
     ciphertext: bytes
 
@@ -344,9 +357,9 @@ class GBLEncryptedData:
         return self.ciphertext
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLEnd:
-    tag_id: ClassVar[GBLTagId] = GBLTagId.END
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLEnd(GBLTagBase):
+    tag_id: int = GBLTagId.END
 
     crc: int
 
@@ -360,8 +373,8 @@ class GBLEnd:
         return self.crc.to_bytes(4, "little")
 
 
-@dataclasses.dataclass(frozen=True)
-class GBLUnknownTag:
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLUnknownTag(GBLTagBase):
     """A tag whose identifier is not recognized. Preserved verbatim."""
 
     tag_id: int
@@ -413,13 +426,24 @@ PROGRAM_DATA_TAGS = (
     GBLProgramDataLZMA,
 )
 
-COMPRESSORS: dict[GBLCompression, tuple[type[GBLTag], Callable[[bytes], bytes]]] = {
-    GBLCompression.LZMA: (GBLProgramDataLZMA, lzma_compress),
-    GBLCompression.LZ4: (GBLProgramDataLZ4, lz4_compress),
+
+def _compress_lzma(address: int, data: bytes) -> GBLProgramDataLZMA:
+    return GBLProgramDataLZMA(address=address, data=lzma_compress(data))
+
+
+def _compress_lz4(address: int, data: bytes) -> GBLProgramDataLZ4:
+    return GBLProgramDataLZ4(address=address, data=lz4_compress(data))
+
+
+# Keyed by algorithm so that adding a `GBLCompression` member without a compressor fails
+# loudly rather than silently leaving program data uncompressed.
+COMPRESSORS: dict[GBLCompression, Callable[[int, bytes], GBLTagBase]] = {
+    GBLCompression.LZMA: _compress_lzma,
+    GBLCompression.LZ4: _compress_lz4,
 }
 
 
-def serialize_tag(tag: GBLTag) -> bytes:
+def serialize_tag(tag: GBLTagBase) -> bytes:
     """Serialize a single tag, header included, exactly as it appears on the wire."""
     payload = tag.serialize_payload()
 
@@ -430,13 +454,13 @@ def serialize_tag(tag: GBLTag) -> bytes:
     )
 
 
-def parse_tag_stream(data: bytes, *, stop_at_end: bool) -> tuple[list[GBLTag], int]:
+def parse_tag_stream(data: bytes, *, stop_at_end: bool) -> tuple[list[GBLTagBase], int]:
     """Parse a sequence of tags, returning them and the offset just past the last one.
 
     Encrypted images wrap a bare tag stream with no end tag, so parsing has to be able
     to run to exhaustion as well as stop at the end tag.
     """
-    tags: list[GBLTag] = []
+    tags: list[GBLTagBase] = []
     offset = 0
 
     while offset < len(data):
@@ -469,7 +493,7 @@ def parse_tag_stream(data: bytes, *, stop_at_end: bool) -> tuple[list[GBLTag], i
 
 @dataclasses.dataclass(frozen=True)
 class GBLImage:
-    tags: list[GBLTag]
+    tags: list[GBLTagBase]
 
     # Bytes following the end tag. Real-world images pad with `0xFF` or `0x00`, and some
     # vendors append an entire second firmware payload. It is outside of the CRC and is
@@ -565,7 +589,9 @@ class GBLImage:
         The header's type flags are part of the signed region, so they are updated
         before the digest is computed.
         """
-        tags = [t for t in self.tags if not isinstance(t, (GBLSignature, GBLEnd))]
+        tags: list[GBLTagBase] = [
+            t for t in self.tags if not isinstance(t, (GBLSignature, GBLEnd))
+        ]
         header = self.get_first_tag(GBLHeader)
         tags[tags.index(header)] = dataclasses.replace(
             header, type=header.type | GBLType.SIGNATURE_ECDSA_P256
@@ -657,12 +683,12 @@ class GBLImage:
 
     def compress(self, algorithm: GBLCompression) -> GBLImage:
         """Return a copy with every uncompressed program data tag compressed."""
-        tag_type, compress = COMPRESSORS[algorithm]
-        tags: list[GBLTag] = []
+        compress = COMPRESSORS[algorithm]
+        tags: list[GBLTagBase] = []
 
         for tag in self.tags:
             if isinstance(tag, (GBLProgramData1, GBLProgramData2)):
-                tags.append(tag_type(address=tag.address, data=compress(tag.data)))
+                tags.append(compress(tag.address, tag.data))
             else:
                 tags.append(tag)
 
@@ -670,7 +696,7 @@ class GBLImage:
 
     def decompress(self) -> GBLImage:
         """Return a copy with every compressed program data tag expanded."""
-        tags: list[GBLTag] = []
+        tags: list[GBLTagBase] = []
 
         for tag in self.tags:
             if isinstance(tag, GBLProgramDataLZMA):
@@ -761,12 +787,12 @@ class GBLImage:
         ).regenerate_crc()
 
 
-def _parse_tag(tag_id: int, payload: bytes) -> GBLTag:
+def _parse_tag(tag_id: int, payload: bytes) -> GBLTagBase:
     try:
         known_tag_id = GBLTagId(tag_id)
     except ValueError:
         return GBLUnknownTag(tag_id=tag_id, payload=payload)
 
-    parsed: GBLTag = GBL_TAG_CLASSES[known_tag_id].from_payload(payload)
+    parsed: GBLTagBase = GBL_TAG_CLASSES[known_tag_id].from_payload(payload)
 
     return parsed
