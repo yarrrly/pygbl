@@ -13,8 +13,8 @@ append after the end tag.
 pip install pygbl
 ```
 
-The base install is pure Python and covers parsing, serializing and LZMA. Signing,
-encryption and LZ4 need optional dependencies:
+The base install is pure Python and covers parsing, serializing, building images from
+ELFs, and LZMA. Signing, encryption and LZ4 need optional dependencies:
 
 ```console
 pip install pygbl[crypto]  # signing and encryption
@@ -82,6 +82,28 @@ And unwrap it again:
 assert sealed.verify_signature(private_key.public_key())
 assert sealed.decrypt(key).decompress().serialize() == image.serialize()
 ```
+
+## Building images from an ELF
+
+Images can be built straight from a linked ELF, without `commander`. Program data comes
+from the loadable segments — keyed by *physical* address, since initialized data is
+stored in flash but linked at its RAM address — and the application info tag is read
+from the SDK's `application_properties_t` struct:
+
+```python
+from pygbl import build_application_gbl, build_bootloader_gbl
+
+with open("zigbee_ncp.out", "rb") as f:
+    image = build_application_gbl(f, metadata=b'{"fw_type": "zigbee_ncp"}')
+
+with open("bootloader.out", "rb") as f:
+    bootloader = build_bootloader_gbl(f)
+```
+
+Both reproduce `commander gbl create` byte-for-byte. Bootloader payloads carry a CRC32
+of themselves, which `build_bootloader_gbl` appends for you.
+
+## EBL
 
 EBL images, used by older EM3xx parts, work the same way:
 

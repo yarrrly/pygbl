@@ -12,10 +12,10 @@ from pygbl import (
     GBLEncryptedData,
     GBLEncryptionInitAesCcm,
     GBLEnd,
+    GBLEraseProg,
     GBLHeader,
     GBLImage,
     GBLMetadata,
-    GBLProgramData2,
     GBLSignature,
     GBLType,
 )
@@ -45,7 +45,7 @@ def build_image() -> GBLImage:
                 capabilities=0,
                 product_id=PRODUCT_ID,
             ),
-            GBLProgramData2(address=0x8006000, data=bytes(range(256)) * 4),
+            GBLEraseProg(address=0x8006000, data=bytes(range(256)) * 4),
             GBLMetadata(metadata=b'{"fw_type": "zwave_ncp"}'),
         ]
     ).regenerate_crc()
@@ -144,7 +144,7 @@ def test_verify_rejects_corrupted_signature() -> None:
 
 def test_verify_rejects_tampered_payload() -> None:
     signed = build_image().sign(PRIVATE_KEY)
-    program = signed.get_first_tag(GBLProgramData2)
+    program = signed.get_first_tag(GBLEraseProg)
     data = bytearray(program.data)
     data[0] ^= 0xFF
 

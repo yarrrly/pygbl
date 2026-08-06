@@ -6,10 +6,10 @@ from pygbl import (
     BootloaderVersion,
     GBLApplicationInfo,
     GBLApplicationType,
+    GBLEraseProg,
     GBLHeader,
     GBLImage,
     GBLMetadata,
-    GBLProgramData2,
     GBLType,
 )
 from pygbl.gbl import GBLBootloader
@@ -20,7 +20,7 @@ BOOTLOADER = GBLBootloader(
     address=0x0,
     data=b"\xbb" * 64,
 )
-PROGRAM_DATA = GBLProgramData2(address=0x6000, data=b"\xaa" * 128)
+PROGRAM_DATA = GBLEraseProg(address=0x6000, data=b"\xaa" * 128)
 METADATA = GBLMetadata(metadata=b'{"fw_type": "zigbee_ncp"}')
 
 
@@ -53,7 +53,7 @@ def test_combine() -> None:
         GBLApplicationType.ZIGBEE | GBLApplicationType.BOOTLOADER
     )
     assert combined.get_first_tag(GBLBootloader) == BOOTLOADER
-    assert combined.get_first_tag(GBLProgramData2) == PROGRAM_DATA
+    assert combined.get_first_tag(GBLEraseProg) == PROGRAM_DATA
     assert combined.get_first_tag(GBLMetadata) == METADATA
     assert combined.is_combined_bootloader_app()
 

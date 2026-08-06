@@ -4,7 +4,7 @@ from collections.abc import Callable
 import dataclasses
 import enum
 import hashlib
-from typing import TYPE_CHECKING, Any, Self, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Self, Union
 import zlib
 
 from pygbl.compression import (
@@ -44,21 +44,29 @@ class GBLTagId(enum.IntEnum):
     SE_UPGRADE = 0x5EA617EB
     # A complete bootloader update image.
     BOOTLOADER = 0xF50909F5
-    # Information about what application data to program at a specific address into the
-    # main flash memory. The two tags are interchangeable.
-    PROGRAM_DATA1 = 0xFE0101FE
-    PROGRAM_DATA2 = 0xFD0303FD
-    # LZ4 compressed information about what application data to program at a specific
-    # address into the main flash memory.
-    PROGRAM_DATA_LZ4 = 0xFD0505FD
-    # LZMA compressed information about what application data to program at a specific
-    # address into the main flash memory.
-    PROGRAM_DATA_LZMA = 0xFD0707FD
+    # Application data to program at a specific address in main flash. The SDK names
+    # these "prog" and "erase&program", but its parser dispatches both to the same
+    # handler, so they behave identically. `commander` emits ERASEPROG by default.
+    PROG = 0xFE0101FE
+    ERASEPROG = 0xFD0303FD
+    # The same, LZ4 or LZMA compressed.
+    PROG_LZ4 = 0xFD0505FD
+    PROG_LZMA = 0xFD0707FD
+    # Delta DFU: a patch against an image already on the device rather than a whole one.
+    DELTA = 0xF80A0AF8
+    DELTA_LZ4 = 0xF80B0BF8
+    DELTA_LZMA = 0xF80C0CF8
+    # Constraints on the versions already installed, e.g. "only apply me if the running
+    # bootloader is at least 2.4".
+    VERSION_DEPENDENCY = 0x76A617EB
     # Metadata that the bootloader does not parse, but can be returned to the
     # application through a callback.
     METADATA = 0xF60808F6
     # The ECDSA-P256 signature of all preceding data in the file.
     SIGNATURE = 0xF70A0AF7
+    # A public key plus its own signature, letting the bootloader verify the image
+    # through a certificate chain instead of against a directly trusted key.
+    CERTIFICATE_ECDSA_P256 = 0xF30B0BF3
     # Encrypted counterparts of the above, used when the GBL is AES-CCM encrypted. The
     # plaintext tags are wrapped inside `ENC_GBL_DATA`.
     ENC_HEADER = 0xFB0505FB
@@ -254,23 +262,136 @@ class _GBLAddressedData(GBLTagBase):
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
-class GBLProgramData1(_GBLAddressedData):
-    tag_id: int = GBLTagId.PROGRAM_DATA1
+class GBLProg(_GBLAddressedData):
+    tag_id: int = GBLTagId.PROG
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
-class GBLProgramData2(_GBLAddressedData):
-    tag_id: int = GBLTagId.PROGRAM_DATA2
+class GBLEraseProg(_GBLAddressedData):
+    tag_id: int = GBLTagId.ERASEPROG
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
-class GBLProgramDataLZ4(_GBLAddressedData):
-    tag_id: int = GBLTagId.PROGRAM_DATA_LZ4
+class GBLProgLZ4(_GBLAddressedData):
+    tag_id: int = GBLTagId.PROG_LZ4
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
-class GBLProgramDataLZMA(_GBLAddressedData):
-    tag_id: int = GBLTagId.PROGRAM_DATA_LZMA
+class GBLProgLZMA(_GBLAddressedData):
+    tag_id: int = GBLTagId.PROG_LZMA
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class _GBLDeltaData(GBLTagBase):
+    """A delta DFU patch: the target image's CRC and size, then the patch itself."""
+
+    new_fw_crc: int
+    new_fw_size: int
+    address: int
+    data: bytes
+
+    @classmethod
+    def from_payload(cls, payload: bytes) -> Self:
+        if len(payload) < 12:
+            raise ParseError(f"{cls.__name__} is truncated: {len(payload)} bytes")
+
+        return cls(
+            tag_id=cls.tag_id,
+            new_fw_crc=int.from_bytes(payload[0:4], "little"),
+            new_fw_size=int.from_bytes(payload[4:8], "little"),
+            address=int.from_bytes(payload[8:12], "little"),
+            data=payload[12:],
+        )
+
+    def serialize_payload(self) -> bytes:
+        return (
+            self.new_fw_crc.to_bytes(4, "little")
+            + self.new_fw_size.to_bytes(4, "little")
+            + self.address.to_bytes(4, "little")
+            + self.data
+        )
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLDelta(_GBLDeltaData):
+    tag_id: int = GBLTagId.DELTA
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLDeltaLZ4(_GBLDeltaData):
+    tag_id: int = GBLTagId.DELTA_LZ4
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLDeltaLZMA(_GBLDeltaData):
+    tag_id: int = GBLTagId.DELTA_LZMA
+
+
+class GBLVersionDependencyImageType(enum.IntEnum):
+    APPLICATION = 0x01
+    BOOTLOADER = 0x02
+    SE = 0x03
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class VersionDependencyStatement:
+    """One comparison, e.g. `appVersion > 1.2.3`.
+
+    `statement` packs the comparison operator in its low nibble and the connective
+    joining it to the next statement in its high nibble.
+    """
+
+    image_type: int
+    statement: int
+    reserved: int = 0
+    version: int
+
+    SIZE: ClassVar[int] = 8
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> VersionDependencyStatement:
+        check_length(data, cls.SIZE, "GBL version dependency statement")
+
+        return cls(
+            image_type=data[0],
+            statement=data[1],
+            reserved=int.from_bytes(data[2:4], "little"),
+            version=int.from_bytes(data[4:8], "little"),
+        )
+
+    def serialize(self) -> bytes:
+        return (
+            bytes([self.image_type, self.statement])
+            + self.reserved.to_bytes(2, "little")
+            + self.version.to_bytes(4, "little")
+        )
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLVersionDependency(GBLTagBase):
+    tag_id: int = GBLTagId.VERSION_DEPENDENCY
+
+    statements: list[VersionDependencyStatement]
+
+    @classmethod
+    def from_payload(cls, payload: bytes) -> GBLVersionDependency:
+        size = VersionDependencyStatement.SIZE
+
+        if len(payload) % size != 0:
+            raise ParseError(
+                f"GBL version dependency must be a multiple of {size} bytes,"
+                f" got {len(payload)}"
+            )
+
+        return cls(
+            statements=[
+                VersionDependencyStatement.from_bytes(payload[offset : offset + size])
+                for offset in range(0, len(payload), size)
+            ]
+        )
+
+    def serialize_payload(self) -> bytes:
+        return b"".join(statement.serialize() for statement in self.statements)
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -305,6 +426,44 @@ class GBLSignature(GBLTagBase):
         check_length(self.s, 32, "GBL signature s")
 
         return self.r + self.s
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GBLCertificateEcdsaP256(GBLTagBase):
+    """The SDK's `ApplicationCertificate_t`, wrapped in a tag."""
+
+    tag_id: int = GBLTagId.CERTIFICATE_ECDSA_P256
+
+    struct_version: int
+    flags: bytes
+    key: bytes
+    version: int
+    signature: bytes
+
+    @classmethod
+    def from_payload(cls, payload: bytes) -> GBLCertificateEcdsaP256:
+        check_length(payload, 136, "GBL ECDSA-P256 certificate")
+
+        return cls(
+            struct_version=payload[0],
+            flags=payload[1:4],
+            key=payload[4:68],
+            version=int.from_bytes(payload[68:72], "little"),
+            signature=payload[72:136],
+        )
+
+    def serialize_payload(self) -> bytes:
+        check_length(self.flags, 3, "GBL certificate flags")
+        check_length(self.key, 64, "GBL certificate key")
+        check_length(self.signature, 64, "GBL certificate signature")
+
+        return (
+            bytes([self.struct_version])
+            + self.flags
+            + self.key
+            + self.version.to_bytes(4, "little")
+            + self.signature
+        )
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -391,12 +550,17 @@ GBLTag = Union[
     GBLApplicationInfo,
     GBLSeUpgrade,
     GBLBootloader,
-    GBLProgramData1,
-    GBLProgramData2,
-    GBLProgramDataLZ4,
-    GBLProgramDataLZMA,
+    GBLProg,
+    GBLEraseProg,
+    GBLProgLZ4,
+    GBLProgLZMA,
+    GBLDelta,
+    GBLDeltaLZ4,
+    GBLDeltaLZMA,
+    GBLVersionDependency,
     GBLMetadata,
     GBLSignature,
+    GBLCertificateEcdsaP256,
     GBLEncryptionHeader,
     GBLEncryptionInitAesCcm,
     GBLEncryptedData,
@@ -409,12 +573,17 @@ GBL_TAG_CLASSES: dict[GBLTagId, Any] = {
     GBLTagId.APP_INFO: GBLApplicationInfo,
     GBLTagId.SE_UPGRADE: GBLSeUpgrade,
     GBLTagId.BOOTLOADER: GBLBootloader,
-    GBLTagId.PROGRAM_DATA1: GBLProgramData1,
-    GBLTagId.PROGRAM_DATA2: GBLProgramData2,
-    GBLTagId.PROGRAM_DATA_LZ4: GBLProgramDataLZ4,
-    GBLTagId.PROGRAM_DATA_LZMA: GBLProgramDataLZMA,
+    GBLTagId.PROG: GBLProg,
+    GBLTagId.ERASEPROG: GBLEraseProg,
+    GBLTagId.PROG_LZ4: GBLProgLZ4,
+    GBLTagId.PROG_LZMA: GBLProgLZMA,
+    GBLTagId.DELTA: GBLDelta,
+    GBLTagId.DELTA_LZ4: GBLDeltaLZ4,
+    GBLTagId.DELTA_LZMA: GBLDeltaLZMA,
+    GBLTagId.VERSION_DEPENDENCY: GBLVersionDependency,
     GBLTagId.METADATA: GBLMetadata,
     GBLTagId.SIGNATURE: GBLSignature,
+    GBLTagId.CERTIFICATE_ECDSA_P256: GBLCertificateEcdsaP256,
     GBLTagId.ENC_HEADER: GBLEncryptionHeader,
     GBLTagId.ENC_INIT: GBLEncryptionInitAesCcm,
     GBLTagId.ENC_GBL_DATA: GBLEncryptedData,
@@ -422,19 +591,19 @@ GBL_TAG_CLASSES: dict[GBLTagId, Any] = {
 }
 
 PROGRAM_DATA_TAGS = (
-    GBLProgramData1,
-    GBLProgramData2,
-    GBLProgramDataLZ4,
-    GBLProgramDataLZMA,
+    GBLProg,
+    GBLEraseProg,
+    GBLProgLZ4,
+    GBLProgLZMA,
 )
 
 
-def _compress_lzma(address: int, data: bytes) -> GBLProgramDataLZMA:
-    return GBLProgramDataLZMA(address=address, data=lzma_compress(data))
+def _compress_lzma(address: int, data: bytes) -> GBLProgLZMA:
+    return GBLProgLZMA(address=address, data=lzma_compress(data))
 
 
-def _compress_lz4(address: int, data: bytes) -> GBLProgramDataLZ4:
-    return GBLProgramDataLZ4(address=address, data=lz4_compress(data))
+def _compress_lz4(address: int, data: bytes) -> GBLProgLZ4:
+    return GBLProgLZ4(address=address, data=lz4_compress(data))
 
 
 # Keyed by algorithm so that adding a `GBLCompression` member without a compressor fails
@@ -689,7 +858,7 @@ class GBLImage:
         tags: list[GBLTagBase] = []
 
         for tag in self.tags:
-            if isinstance(tag, (GBLProgramData1, GBLProgramData2)):
+            if isinstance(tag, (GBLProg, GBLEraseProg)):
                 tags.append(compress(tag.address, tag.data))
             else:
                 tags.append(tag)
@@ -701,13 +870,13 @@ class GBLImage:
         tags: list[GBLTagBase] = []
 
         for tag in self.tags:
-            if isinstance(tag, GBLProgramDataLZMA):
+            if isinstance(tag, GBLProgLZMA):
                 tags.append(
-                    GBLProgramData2(address=tag.address, data=lzma_decompress(tag.data))
+                    GBLEraseProg(address=tag.address, data=lzma_decompress(tag.data))
                 )
-            elif isinstance(tag, GBLProgramDataLZ4):
+            elif isinstance(tag, GBLProgLZ4):
                 tags.append(
-                    GBLProgramData2(address=tag.address, data=lz4_decompress(tag.data))
+                    GBLEraseProg(address=tag.address, data=lz4_decompress(tag.data))
                 )
             else:
                 tags.append(tag)

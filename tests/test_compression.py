@@ -7,13 +7,13 @@ from pygbl import (
     GBLApplicationInfo,
     GBLApplicationType,
     GBLCompression,
+    GBLEraseProg,
     GBLHeader,
     GBLImage,
     GBLMetadata,
-    GBLProgramData1,
-    GBLProgramData2,
-    GBLProgramDataLZ4,
-    GBLProgramDataLZMA,
+    GBLProg,
+    GBLProgLZ4,
+    GBLProgLZMA,
     GBLType,
 )
 from pygbl.compression import (
@@ -41,8 +41,8 @@ def build_image() -> GBLImage:
                 capabilities=0,
                 product_id=PRODUCT_ID,
             ),
-            GBLProgramData2(address=0x8006000, data=PAYLOAD),
-            GBLProgramData2(address=0x8106000, data=PAYLOAD[:1024]),
+            GBLEraseProg(address=0x8006000, data=PAYLOAD),
+            GBLEraseProg(address=0x8106000, data=PAYLOAD[:1024]),
             GBLMetadata(metadata=b'{"fw_type": "zwave_ncp"}'),
         ]
     ).regenerate_crc()
@@ -97,18 +97,18 @@ def test_compression_actually_shrinks() -> None:
 @pytest.mark.parametrize(
     ("algorithm", "tag_type"),
     [
-        (GBLCompression.LZMA, GBLProgramDataLZMA),
-        (GBLCompression.LZ4, GBLProgramDataLZ4),
+        (GBLCompression.LZMA, GBLProgLZMA),
+        (GBLCompression.LZ4, GBLProgLZ4),
     ],
 )
 def test_compress_replaces_program_data_tags(
     algorithm: GBLCompression,
-    tag_type: type[GBLProgramDataLZMA] | type[GBLProgramDataLZ4],
+    tag_type: type[GBLProgLZMA] | type[GBLProgLZ4],
 ) -> None:
     compressed = build_image().compress(algorithm)
 
     assert len(compressed.get_tags(tag_type)) == 2
-    assert compressed.get_tags(GBLProgramData2) == []
+    assert compressed.get_tags(GBLEraseProg) == []
     assert [t.address for t in compressed.get_tags(tag_type)] == [0x8006000, 0x8106000]
 
 
@@ -143,13 +143,13 @@ def test_compress_leaves_other_tags_alone(algorithm: GBLCompression) -> None:
 def test_compress_handles_program_data1() -> None:
     """Both program data tag ids are interchangeable and both compress."""
     tags = list(build_image().tags)
-    tags[2] = GBLProgramData1(address=0x8006000, data=PAYLOAD)
+    tags[2] = GBLProg(address=0x8006000, data=PAYLOAD)
     variant = GBLImage(tags=tags).regenerate_crc()
 
     compressed = variant.compress(GBLCompression.LZMA)
 
-    assert compressed.get_tags(GBLProgramData1) == []
-    assert len(compressed.get_tags(GBLProgramDataLZMA)) == 2
+    assert compressed.get_tags(GBLProg) == []
+    assert len(compressed.get_tags(GBLProgLZMA)) == 2
 
 
 def test_decompress_is_a_noop_on_plain_images() -> None:

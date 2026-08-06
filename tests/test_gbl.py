@@ -12,10 +12,10 @@ from pygbl import (
     GBLEncryptedData,
     GBLEncryptionInitAesCcm,
     GBLEnd,
+    GBLEraseProg,
     GBLHeader,
     GBLImage,
     GBLMetadata,
-    GBLProgramData2,
     GBLSignature,
     GBLTagBase,
     GBLTagId,
@@ -47,7 +47,7 @@ def app_info(app_type: GBLApplicationType) -> GBLApplicationInfo:
 def test_build_and_reparse() -> None:
     image = build(
         app_info(GBLApplicationType.ZIGBEE),
-        GBLProgramData2(address=0x1000, data=b"\xab" * 16),
+        GBLEraseProg(address=0x1000, data=b"\xab" * 16),
     )
     data = image.serialize()
 
@@ -148,7 +148,7 @@ def test_trailing_data_is_outside_the_crc() -> None:
 
 
 def test_block_size_padding() -> None:
-    image = build(GBLProgramData2(address=0, data=b"\x00" * 3))
+    image = build(GBLEraseProg(address=0, data=b"\x00" * 3))
 
     assert len(image.serialize(block_size=128)) % 128 == 0
     assert image.serialize(block_size=128).startswith(image.serialize())
@@ -192,14 +192,14 @@ def test_metadata_is_opaque_bytes() -> None:
 
 
 def test_tag_lookup_helpers() -> None:
-    first = GBLProgramData2(address=0, data=b"\x01")
-    second = GBLProgramData2(address=4, data=b"\x02")
+    first = GBLEraseProg(address=0, data=b"\x01")
+    second = GBLEraseProg(address=4, data=b"\x02")
     image = build(first, second)
 
-    assert image.get_tags(GBLProgramData2) == [first, second]
-    assert image.get_first_tag(GBLProgramData2) == first
+    assert image.get_tags(GBLEraseProg) == [first, second]
+    assert image.get_first_tag(GBLEraseProg) == first
     assert image.find_first_tag(GBLMetadata) is None
-    assert image.has_tag(GBLProgramData2)
+    assert image.has_tag(GBLEraseProg)
     assert not image.has_tag(GBLMetadata)
 
     with pytest.raises(KeyError, match="No GBLMetadata tag exists"):

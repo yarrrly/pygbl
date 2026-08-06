@@ -9,10 +9,10 @@ import pytest
 
 from pygbl import (
     GBLCompression,
+    GBLEraseProg,
     GBLHeader,
     GBLImage,
     GBLMetadata,
-    GBLProgramData2,
     GBLType,
     MissingDependencyError,
 )
@@ -26,7 +26,7 @@ def build_image() -> GBLImage:
     return GBLImage(
         tags=[
             GBLHeader(version=3, type=GBLType.NONE),
-            GBLProgramData2(address=0x8006000, data=PAYLOAD),
+            GBLEraseProg(address=0x8006000, data=PAYLOAD),
             GBLMetadata(metadata=b"{}"),
         ]
     ).regenerate_crc()
