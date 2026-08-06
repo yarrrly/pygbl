@@ -86,8 +86,8 @@ assert sealed.decrypt(key).decompress().serialize() == image.serialize()
 ## Building images from an ELF
 
 Images can be built straight from a linked ELF, without `commander`. Program data comes
-from the loadable segments — keyed by *physical* address, since initialized data is
-stored in flash but linked at its RAM address — and the application info tag is read
+from the loadable segments (keyed by *physical* address, since initialized data is
+stored in flash but linked at its RAM address) and the application info tag is read
 from the SDK's `application_properties_t` struct:
 
 ```python
@@ -124,7 +124,7 @@ for info in image.get_tags(GBL4MemorySectionInfo):
     print(info.compression_scheme, info.encryption_scheme, info.nonce.hex())
 ```
 
-Reading and writing are supported; building a v4 image from an ELF is not — the ELF
+Reading and writing are supported; building a v4 image from an ELF is not, the ELF
 helpers are GBLv3 only.
 
 ## EBL
