@@ -30,6 +30,9 @@ APP_INFO_SIZE = 28
 
 GBL3_SPEC_VERSION = 3
 
+ERASED_FLASH = b"\xff"
+MAX_IMAGE_SIZE = 100 * 1024 * 1024
+
 
 @dataclasses.dataclass(frozen=True)
 class LoadableSegment:
@@ -60,6 +63,26 @@ def _loadable_segments(elf: ELFFile) -> list[LoadableSegment]:
         raise ParseError("ELF contains no loadable segments")
 
     return merged
+
+
+def _flatten(segments: list[LoadableSegment]) -> LoadableSegment:
+    """Collapse segments into the single run they occupy in flash."""
+    address = min(segment.address for segment in segments)
+    end = max(segment.address + len(segment.data) for segment in segments)
+
+    if end - address > MAX_IMAGE_SIZE:
+        raise ParseError(
+            f"Segments span {end - address} bytes, more than the"
+            f" {MAX_IMAGE_SIZE} byte limit"
+        )
+
+    image = bytearray(ERASED_FLASH * (end - address))
+
+    for segment in segments:
+        offset = segment.address - address
+        image[offset : offset + len(segment.data)] = segment.data
+
+    return LoadableSegment(address=address, data=bytes(image))
 
 
 def _application_properties(elf: ELFFile) -> bytes:
@@ -151,14 +174,10 @@ def build_bootloader_gbl3(
 ) -> GBL3Image:
     """Build a bootloader GBL from a linked ELF."""
     elf = ELFFile(elf_file)
-    segments = _loadable_segments(elf)
 
-    if len(segments) != 1:
-        raise ParseError(
-            f"Expected one contiguous bootloader segment, got {len(segments)}"
-        )
-
-    segment = segments[0]
+    # Unlike an application, a bootloader is programmed as one flash image, so the
+    # alignment holes between segments are filled rather than kept as separate runs.
+    segment = _flatten(_loadable_segments(elf))
     tags: list[GBL3TagBase] = [
         GBL3Header(version=GBL3_SPEC_VERSION, type=GBL3Type.NONE),
         GBL3Bootloader(
