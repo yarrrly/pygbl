@@ -20,6 +20,7 @@ from pygbl.compression import (
     LZMA_DICT_SIZE,
     LZMA_HEADER_SIZE,
     LZMA_PROPS_SIZE,
+    ends_with_end_marker,
     lz4_compress,
     lz4_decompress,
     lzma_compress,
@@ -66,6 +67,34 @@ def test_lzma_records_the_uncompressed_size() -> None:
     size = int.from_bytes(compressed[LZMA_PROPS_SIZE:LZMA_HEADER_SIZE], "little")
 
     assert size == len(PAYLOAD)
+
+
+@pytest.mark.parametrize("size", [0, 1, 15, 368, 1384, 20000])
+def test_lzma_writes_an_end_marker(size: int) -> None:
+    """The bootloader fails the update without one, after flashing past the payload."""
+    data = bytes((i * 7) % 251 for i in range(size))
+
+    assert ends_with_end_marker(lzma_compress(data))
+
+
+def test_end_marker_check_rejects_a_truncated_stream() -> None:
+    compressed = lzma_compress(PAYLOAD)
+
+    assert not ends_with_end_marker(compressed[:-1])
+
+
+@pytest.mark.parametrize(("lc", "lp"), [(3, 0), (1, 2), (2, 1), (0, 3)])
+def test_lzma_rejects_an_oversized_probability_model(lc: int, lp: int) -> None:
+    """The decoder has 10 KiB for the model, which caps `lc + lp` at 2."""
+    with pytest.raises(ValueError, match="lc \\+ lp"):
+        lzma_compress(PAYLOAD, lc=lc, lp=lp)
+
+
+@pytest.mark.parametrize("dict_size", [16384, 65536, 1 << 20])
+def test_lzma_rejects_an_oversized_dictionary(dict_size: int) -> None:
+    """The decoder has a statically sized 8 KiB dictionary buffer."""
+    with pytest.raises(ValueError, match="dict_size"):
+        lzma_compress(PAYLOAD, dict_size=dict_size)
 
 
 @pytest.mark.parametrize("size", [1, 15, 368, 1384, 20000])
