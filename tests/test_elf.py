@@ -37,13 +37,22 @@ from pygbl import (
     read_encryption_key,
     read_loadable_segments,
 )
-from pygbl.elf import APP_PROPERTIES_MAGIC
+from pygbl.elf import (
+    APP_PROPERTIES_MAGIC,
+    ERASED_FLASH,
+    MAX_IMAGE_SIZE,
+    LoadableSegment,
+    _flatten,
+)
 
 FILES = pathlib.Path(__file__).parent / "files"
 
 # Representatives for the format-level assertions
 APPLICATION = "yellow_openthread_rcp"
 BOOTLOADER = "zbt2_bootloader"
+
+# MG21 aligns `.text` past the 308 byte vector table, leaving a four byte hole
+SPLIT_BOOTLOADER = "yellow_bootloader"
 
 ELVES = sorted(p.stem for p in FILES.glob("*.out"))
 
@@ -238,11 +247,40 @@ def test_bootloader_payload_carries_its_own_crc() -> None:
     assert bootloader.address == segments[0].address
 
 
-def test_bootloader_builder_rejects_split_images() -> None:
-    """An application ELF has several separate runs, so it is not a bootloader."""
-    with elf_path(APPLICATION).open("rb") as f:
-        with pytest.raises(ParseError, match="one contiguous bootloader segment"):
-            build_bootloader_gbl3(f)
+def test_bootloader_holes_are_filled_with_erased_flash() -> None:
+    """A bootloader is one flash image, so gaps between segments become `0xFF`."""
+    with elf_path(SPLIT_BOOTLOADER).open("rb") as f:
+        segments = read_loadable_segments(f)
+
+    with elf_path(SPLIT_BOOTLOADER).open("rb") as f:
+        bootloader = build_bootloader_gbl3(f).get_first_tag(GBL3Bootloader)
+
+    assert len(segments) > 1
+
+    payload = bootloader.data[:-4]
+    hole = slice(
+        segments[0].address + len(segments[0].data) - bootloader.address,
+        segments[1].address - bootloader.address,
+    )
+
+    assert hole.stop > hole.start
+    assert payload[hole] == ERASED_FLASH * (hole.stop - hole.start)
+
+    # Everything else is the segments themselves, laid down at their own addresses
+    for segment in segments:
+        offset = segment.address - bootloader.address
+        assert payload[offset : offset + len(segment.data)] == segment.data
+
+
+def test_flatten_rejects_an_absurd_span() -> None:
+    """Bail out before allocating the buffer, not after."""
+    segments = [
+        LoadableSegment(address=0, data=b"\x00"),
+        LoadableSegment(address=MAX_IMAGE_SIZE, data=b"\x00"),
+    ]
+
+    with pytest.raises(ParseError, match="more than the"):
+        _flatten(segments)
 
 
 def test_rejects_non_elf_input() -> None:
