@@ -27,10 +27,14 @@ if not IMAGES:
 
 @pytest.mark.parametrize("path", IMAGES, ids=image_id)
 def test_roundtrip_exact(path: pathlib.Path) -> None:
+    """Tags plus whatever followed them reproduce the file byte-for-byte."""
     data = path.read_bytes()
-    image = parse_firmware_image(data)
+    parsed = parse_firmware_image(data)
+    assert isinstance(parsed, (GBL3Image, EBLImage))
 
-    assert image.serialize() == data
+    image, trailing = type(parsed).deserialize(data)
+
+    assert image.serialize(block_size=1) + trailing == data
 
 
 @pytest.mark.parametrize("path", IMAGES, ids=image_id)
@@ -59,18 +63,21 @@ def test_regenerate_crc_is_stable(path: pathlib.Path) -> None:
     image = parse_firmware_image(data)
     assert isinstance(image, (GBL3Image, EBLImage))
 
+    image, trailing = type(image).deserialize(data)
+
     assert image.regenerate_crc() == image
-    assert image.regenerate_crc().serialize() == data
+    assert image.regenerate_crc().serialize(block_size=1) + trailing == data
 
 
 @pytest.mark.parametrize("path", IMAGES, ids=image_id)
-def test_block_padding_preserves_trailing_data(path: pathlib.Path) -> None:
+def test_block_padding_extends_the_tag_region(path: pathlib.Path) -> None:
     data = path.read_bytes()
     image = parse_firmware_image(data)
     assert isinstance(image, (GBL3Image, EBLImage))
 
+    unpadded = image.serialize(block_size=1)
     padded = image.serialize(block_size=128)
 
-    assert padded.startswith(data)
+    assert padded.startswith(unpadded)
     assert len(padded) % 128 == 0
-    assert padded[len(data) :].strip(b"\xff") == b""
+    assert padded[len(unpadded) :].strip(b"\xff") == b""

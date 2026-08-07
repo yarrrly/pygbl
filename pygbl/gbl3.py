@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 
 GBL3_MAGIC = b"\xeb\x17\xa6\x03"
 
+# `commander` pads its output up to a word boundary with 0xFF
+GBL3_BLOCK_SIZE = 4
+
 
 class GBL3TagId(enum.IntEnum):
     """GBL tag identifiers, as decoded from the little-endian 32-bit value on the wire."""
@@ -678,30 +681,36 @@ def parse_tag_stream(
 class GBL3Image:
     tags: list[GBL3TagBase]
 
-    # Bytes following the end tag. Real-world images pad with `0xFF` or `0x00`, and some
-    # vendors append an entire second firmware payload. It is outside of the CRC and is
-    # preserved verbatim so that images round-trip byte-for-byte.
-    trailing_data: bytes = b""
-
     @classmethod
-    def from_bytes(cls, data: bytes, *, validate: bool = True) -> GBL3Image:
+    def deserialize(cls, data: bytes, *, validate: bool = True) -> tuple[Self, bytes]:
+        """Parse an image, returning it and whatever followed its end tag.
+
+        Real-world files carry `commander`'s word padding, vendor junk or even a second
+        firmware payload after the end tag. None of it is covered by the CRC, so what to
+        do with it is the caller's decision.
+        """
         data = bytes(data)
         tags, offset = parse_tag_stream(data, stop_at_end=True)
-        image = cls(tags=tags, trailing_data=data[offset:])
+        image = cls(tags=tags)
 
         if validate:
             image.validate()
 
-        return image
+        return image, data[offset:]
+
+    @classmethod
+    def from_bytes(cls, data: bytes, *, validate: bool = True) -> Self:
+        """Parse an image, discarding anything that followed its end tag."""
+        return cls.deserialize(data, validate=validate)[0]
 
     def serialize_tags(self) -> bytes:
         """Serialize only the tag region, which is what the CRC covers."""
         return b"".join(serialize_tag(t) for t in self.tags)
 
-    def serialize(self, *, block_size: int = 1, padding: bytes = b"\xff") -> bytes:
-        return pad_to_multiple(
-            self.serialize_tags() + self.trailing_data, block_size, padding
-        )
+    def serialize(
+        self, *, block_size: int = GBL3_BLOCK_SIZE, padding: bytes = b"\xff"
+    ) -> bytes:
+        return pad_to_multiple(self.serialize_tags(), block_size, padding)
 
     def validate(self) -> None:
         if not self.tags:
@@ -748,9 +757,7 @@ class GBL3Image:
         placeholder = type(self)(tags=[*tags, GBL3End(crc=0)])
         crc = zlib.crc32(placeholder.serialize_tags()[:-4]) & 0xFFFFFFFF
 
-        return type(self)(
-            tags=[*tags, GBL3End(crc=crc)], trailing_data=self.trailing_data
-        )
+        return type(self)(tags=[*tags, GBL3End(crc=crc)])
 
     def signing_digest(self) -> bytes:
         """The SHA-256 digest an ECDSA signature covers.
@@ -783,9 +790,7 @@ class GBL3Image:
         unsigned = type(self)(tags=tags)
         r, s = sign_digest(private_key, unsigned.signing_digest())
 
-        return type(self)(
-            tags=[*tags, GBL3Signature(r=r, s=s)], trailing_data=self.trailing_data
-        ).regenerate_crc()
+        return type(self)(tags=[*tags, GBL3Signature(r=r, s=s)]).regenerate_crc()
 
     def verify_signature(self, public_key: ec.EllipticCurvePublicKey) -> bool:
         signature = self.find_first_tag(GBL3Signature)
@@ -836,7 +841,6 @@ class GBL3Image:
                 GBL3EncryptionInitAesCcm(msg_len=len(ciphertext), nonce=nonce),
                 *encrypted,
             ],
-            trailing_data=self.trailing_data,
         ).regenerate_crc()
 
     def decrypt(self, key: bytes) -> GBL3Image:
@@ -863,7 +867,6 @@ class GBL3Image:
                 ),
                 *tags,
             ],
-            trailing_data=self.trailing_data,
         ).regenerate_crc()
 
     def compress(self, algorithm: GBL3Compression) -> GBL3Image:
@@ -877,7 +880,7 @@ class GBL3Image:
             else:
                 tags.append(tag)
 
-        return type(self)(tags=tags, trailing_data=self.trailing_data).regenerate_crc()
+        return type(self)(tags=tags).regenerate_crc()
 
     def decompress(self) -> GBL3Image:
         """Return a copy with every compressed program data tag expanded."""
@@ -895,7 +898,7 @@ class GBL3Image:
             else:
                 tags.append(tag)
 
-        return type(self)(tags=tags, trailing_data=self.trailing_data).regenerate_crc()
+        return type(self)(tags=tags).regenerate_crc()
 
     def is_combined_bootloader_app(self) -> bool:
         app_info = self.find_first_tag(GBL3ApplicationInfo)

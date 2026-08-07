@@ -506,10 +506,10 @@ class GBL4Image:
     """A GBLv4 file: one root tag, plus anything following it."""
 
     root: GBL4Root
-    trailing_data: bytes = b""
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> GBL4Image:
+    def deserialize(cls, data: bytes) -> tuple[Self, bytes]:
+        """Parse an image, returning it and whatever followed the root tag."""
         data = bytes(data)
 
         if not data.startswith(GBL4_MAGIC):
@@ -524,10 +524,15 @@ class GBL4Image:
                 f" got {len(data) - 8}"
             )
 
-        return cls(root=GBL4Root.from_payload(data[8:end]), trailing_data=data[end:])
+        return cls(root=GBL4Root.from_payload(data[8:end])), data[end:]
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self:
+        """Parse an image, discarding anything that followed the root tag."""
+        return cls.deserialize(data)[0]
 
     def serialize(self) -> bytes:
-        return serialize_tag(self.root) + self.trailing_data
+        return serialize_tag(self.root)
 
     def get_tags(self, tag_type: type[T]) -> list[T]:
         """Every tag of a type, at any depth."""

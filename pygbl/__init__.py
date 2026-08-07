@@ -30,6 +30,7 @@ from pygbl.elf import (
     read_loadable_segments,
 )
 from pygbl.gbl3 import (
+    GBL3_BLOCK_SIZE,
     GBL3_MAGIC,
     BootloaderVersion,
     GBL3ApplicationInfo,
@@ -122,6 +123,7 @@ def parse_firmware_image(data: bytes, *, validate: bool = True) -> FirmwareImage
 __all__ = [
     "EBL_BLOCK_SIZE",
     "EBL_MAGIC",
+    "GBL3_BLOCK_SIZE",
     "GBL3_MAGIC",
     "VALID_CRC32",
     "BootloaderVersion",

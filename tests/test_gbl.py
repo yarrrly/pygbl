@@ -5,6 +5,7 @@ import zlib
 import pytest
 
 from pygbl import (
+    GBL3_BLOCK_SIZE,
     VALID_CRC32,
     BootloaderVersion,
     GBL3ApplicationInfo,
@@ -29,13 +30,8 @@ from pygbl import (
 PRODUCT_ID = bytes(range(16))
 
 
-def build(
-    *tags: GBL3TagBase, trailing_data: bytes = b"", type: GBL3Type = GBL3Type.NONE
-) -> GBL3Image:
-    return GBL3Image(
-        tags=[GBL3Header(version=3, type=type), *tags],
-        trailing_data=trailing_data,
-    ).regenerate_crc()
+def build(*tags: GBL3TagBase, type: GBL3Type = GBL3Type.NONE) -> GBL3Image:
+    return GBL3Image(tags=[GBL3Header(version=3, type=type), *tags]).regenerate_crc()
 
 
 def app_info(app_type: GBL3ApplicationType) -> GBL3ApplicationInfo:
@@ -127,37 +123,60 @@ def test_unknown_header_flags_are_preserved() -> None:
 
 
 @pytest.mark.parametrize(
-    "trailing", [b"", b"\xff", b"\xff\xff\xff", b"\x00\x00", b"vendor payload"]
+    "trailing", [b"", b"\xff", b"\x00\x00", b"vendor payload", b"\xff" * 64]
 )
-def test_trailing_data_roundtrips(trailing: bytes) -> None:
-    image = build(GBL3Metadata(metadata=b"{}"), trailing_data=trailing)
-    data = image.serialize()
+def test_deserialize_hands_back_trailing_data(trailing: bytes) -> None:
+    """Anything after the end tag is the caller's to keep or drop."""
+    image = build(GBL3Metadata(metadata=b"{}"))
+    data = image.serialize(block_size=1) + trailing
 
-    assert data.endswith(trailing)
+    parsed, rest = GBL3Image.deserialize(data)
+
+    assert parsed == image
+    assert rest == trailing
+    assert parsed.serialize(block_size=1) + rest == data
+
+
+def test_from_bytes_discards_trailing_data() -> None:
+    image = build(GBL3Metadata(metadata=b"{}"))
+    data = image.serialize(block_size=1) + b"vendor payload"
+
     assert GBL3Image.from_bytes(data) == image
-    assert GBL3Image.from_bytes(data).trailing_data == trailing
+
+
+def test_serialize_pads_to_a_word_boundary() -> None:
+    """`commander` does this, and nothing downstream needs the padding back."""
+    data = build(GBL3Metadata(metadata=b"{}")).serialize()
+    _, rest = GBL3Image.deserialize(data)
+
+    assert len(data) % GBL3_BLOCK_SIZE == 0
+    assert set(rest) <= {0xFF}
+    assert len(rest) < GBL3_BLOCK_SIZE
 
 
 def test_trailing_data_is_outside_the_crc() -> None:
-    tags = [GBL3Header(version=3, type=GBL3Type.NONE), GBL3Metadata(metadata=b"{}")]
-    without = GBL3Image(tags=tags).regenerate_crc()
-    with_trailing = GBL3Image(tags=tags, trailing_data=b"\xff" * 64).regenerate_crc()
+    image = build(GBL3Metadata(metadata=b"{}"))
+    data = image.serialize(block_size=1)
 
-    assert without.get_first_tag(GBL3End) == with_trailing.get_first_tag(GBL3End)
-    with_trailing.validate()
+    parsed, rest = GBL3Image.deserialize(data + b"\xee" * 64)
+
+    assert rest == b"\xee" * 64
+    assert parsed.get_first_tag(GBL3End) == image.get_first_tag(GBL3End)
+    parsed.validate()
 
 
 def test_block_size_padding() -> None:
     image = build(GBL3EraseProg(address=0, data=b"\x00" * 3))
 
     assert len(image.serialize(block_size=128)) % 128 == 0
-    assert image.serialize(block_size=128).startswith(image.serialize())
+    assert image.serialize(block_size=128).startswith(image.serialize(block_size=1))
     assert image.serialize(block_size=128).endswith(b"\xff")
     assert image.serialize(block_size=128, padding=b"\x00").endswith(b"\x00")
 
 
 def test_bad_crc_rejected() -> None:
-    data = bytearray(build(GBL3Metadata(metadata=b"{}")).serialize())
+    # Unpadded, so the last byte is the CRC itself rather than word padding
+    data = bytearray(build(GBL3Metadata(metadata=b"{}")).serialize(block_size=1))
     data[-1] ^= 0xFF
 
     with pytest.raises(ValidationError, match="CRC-32 is invalid"):
