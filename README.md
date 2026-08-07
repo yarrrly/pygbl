@@ -3,9 +3,8 @@
 A parser for the EBL and GBL (v3 and v4) firmware image formats used by the
 [Silicon Labs Gecko bootloader](https://www.silabs.com/documents/public/user-guides/ug489-gecko-bootloader-user-guide-gsdk-4.pdf).
 
-Images are parsed into structured tags, and round-trip byte-for-byte: anything the
-library reads it can write back unchanged, including the trailing data that some vendors
-append after the end tag.
+Images are parsed into structured tags and round-trip byte-for-byte, with anything
+following the end tag handed back separately rather than folded into the image.
 
 ## Installation
 
@@ -41,8 +40,15 @@ for tag in image.tags:
 
 print(image.get_first_tag(GBL3ApplicationInfo).version)
 print(image.get_metadata())  # opaque bytes, the schema is vendor defined
+```
 
-assert image.serialize() == data
+`serialize` pads up to a word boundary, as `commander` does. `parse_firmware_image`
+discards anything after the end tag; `deserialize` hands it back:
+
+```python
+image, trailing = GBL3Image.deserialize(data)
+
+assert image.serialize(block_size=1) + trailing == data
 ```
 
 Modify an image. Tags are frozen dataclasses, so `dataclasses.replace` works, and
@@ -73,8 +79,11 @@ private_key = load_pem_private_key(
 key = bytes.fromhex("7F8FE53979B31BC556FCB131AFF42414")
 
 sealed = image.compress(GBL3Compression.LZMA).encrypt(key).sign(private_key)
-pathlib.Path("signed.gbl").write_bytes(sealed.serialize(block_size=4))
+pathlib.Path("signed.gbl").write_bytes(sealed.serialize())
 ```
+
+The bootloader decompresses into fixed buffers, so `compress` uses the only LZMA
+parameters it can accept. Overriding them past what it can allocate raises `ValueError`.
 
 And unwrap it again:
 
@@ -100,21 +109,18 @@ with open("bootloader.out", "rb") as f:
     bootloader = build_bootloader_gbl3(f)
 ```
 
-Both reproduce `commander gbl create` byte-for-byte. Bootloader payloads carry a CRC32
-of themselves, which `build_bootloader_gbl3` appends for you.
-
 ## GBLv4
 
 Series 3 parts use GBLv4, a different format that nests tags inside a signed manifest
-and can bundle several updates in one file. `parse_firmware_image` recognizes it by its
-magic and returns a `GBL4Image`, which round-trips byte-for-byte like the rest:
+and can bundle several updates in one file.
 
 ```python
 from pygbl import GBL4Image, GBL4MemorySectionInfo, GBL4UpdateMemorySection
 
-image = parse_firmware_image(pathlib.Path("light-simg301.gbl4").read_bytes())
-assert isinstance(image, GBL4Image)
-assert image.serialize() == data
+data = pathlib.Path("light-simg301.gbl4").read_bytes()
+image, trailing = GBL4Image.deserialize(data)
+
+assert image.serialize() + trailing == data
 
 # `get_tags` searches the whole tree, at any depth
 for update in image.get_tags(GBL4UpdateMemorySection):
