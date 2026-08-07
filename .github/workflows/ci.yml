@@ -130,6 +130,22 @@ jobs:
       - name: Set up uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Cache Simplicity Commander
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/commander
+          key: 1-${{ runner.os }}-commander-1.24.1
+      - name: Install Simplicity Commander
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0t64
+          if [ ! -x "$HOME/commander/commander" ]; then
+            curl -sSfL -o /tmp/commander.tar.bz \
+              https://updates.silabs.com/studio/v6/updates/update_site/archives/commander/1.24.1/Commander_linux_x86_64_1v24p1b1980.tar.bz
+            echo "3ba24eeaeb560e9db306a4d070e2bbe40b456701b4b87c53643a93ab1101b2c4  /tmp/commander.tar.bz" | sha256sum -c
+            tar -xjf /tmp/commander.tar.bz -C "$HOME"
+          fi
+          echo "$HOME/commander" >> "$GITHUB_PATH"
       - name: Register Python problem matcher
         run: |
           echo "::add-matcher::.github/workflows/matchers/python.json"

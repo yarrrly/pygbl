@@ -30,8 +30,8 @@ HEADER = EBLHeader(
 )
 
 
-def build(*tags: EBLTagBase, trailing_data: bytes = b"") -> EBLImage:
-    return EBLImage(tags=[HEADER, *tags], trailing_data=trailing_data).regenerate_crc()
+def build(*tags: EBLTagBase) -> EBLImage:
+    return EBLImage(tags=[HEADER, *tags]).regenerate_crc()
 
 
 def test_build_and_reparse() -> None:
@@ -72,7 +72,8 @@ def test_header_fields_are_big_endian() -> None:
 def test_end_tag_crc_is_little_endian() -> None:
     """Every other EBL field is big-endian, but the end tag's CRC is not."""
     image = build(EBLEraseProgram(address=0, data=b"\x00" * 8))
-    data = image.serialize()
+    # Unpadded, so the last bytes are the CRC itself rather than block padding
+    data = image.serialize(block_size=1)
     crc = image.get_first_tag(EBLEnd).crc
 
     assert data[-4:] == crc.to_bytes(4, "little")
@@ -104,23 +105,25 @@ def test_program_and_eraseprogram_are_distinct_tags() -> None:
 @pytest.mark.parametrize(
     "trailing", [b"", b"\xff" * 20, b"\x00" * 8, b"vendor payload"]
 )
-def test_trailing_data_roundtrips(trailing: bytes) -> None:
-    image = build(EBLEraseProgram(address=0, data=b"\x01"), trailing_data=trailing)
-    data = image.serialize()
+def test_deserialize_hands_back_trailing_data(trailing: bytes) -> None:
+    image = build(EBLEraseProgram(address=0, data=b"\x01"))
+    data = image.serialize(block_size=1) + trailing
 
-    assert data.endswith(trailing)
-    assert EBLImage.from_bytes(data) == image
-    assert EBLImage.from_bytes(data).trailing_data == trailing
+    parsed, rest = EBLImage.deserialize(data)
+
+    assert parsed == image
+    assert rest == trailing
+    assert parsed.serialize(block_size=1) + rest == data
 
 
 def test_unaligned_image_is_accepted() -> None:
     """Real images append vendor payloads that break 64 byte alignment."""
-    image = build(EBLEraseProgram(address=0, data=b"\x01"), trailing_data=b"\xa5" * 3)
-    data = image.serialize()
+    image = build(EBLEraseProgram(address=0, data=b"\x01"))
+    data = image.serialize(block_size=1) + b"\xa5" * 3
 
     assert len(data) % EBL_BLOCK_SIZE != 0
 
-    EBLImage.from_bytes(data).validate()
+    EBLImage.deserialize(data)[0].validate()
 
 
 def test_block_padding_to_ebl_alignment() -> None:
@@ -141,7 +144,10 @@ def test_unknown_tag_is_preserved() -> None:
 
 
 def test_bad_crc_rejected() -> None:
-    data = bytearray(build(EBLEraseProgram(address=0, data=b"\x01")).serialize())
+    # Unpadded, so the last byte is the CRC itself rather than block padding
+    data = bytearray(
+        build(EBLEraseProgram(address=0, data=b"\x01")).serialize(block_size=1)
+    )
     data[-1] ^= 0xFF
 
     with pytest.raises(ValidationError, match="CRC-32 is invalid"):

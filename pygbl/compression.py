@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import lzma
 
-from pygbl.types import MissingDependencyError
+from pygbl.types import MissingDependencyError, ValidationError
 
 try:
     import lz4.block
@@ -11,14 +11,14 @@ except ImportError:
 else:
     HAVE_LZ4 = True
 
-# The Gecko bootloader's LZMA decoder is memory constrained. Its probability model needs
-# `4 KiB + 1.5 KiB * (1 << (lc + lp))` of RAM and its dictionary buffer is statically
-# sized, so images cannot use the LZMA defaults of lc=3, lp=0 and a large dictionary.
-# `commander` emits lc=1, lp=1, pb=2 with an 8 KiB dictionary.
 LZMA_LC = 1
 LZMA_LP = 1
 LZMA_PB = 2
 LZMA_DICT_SIZE = 8192
+LZMA_MAX_LC_PLUS_LP = 2
+LZMA_MAX_DICT_SIZE = 8192
+LZMA_NICE_LEN = 32
+LZMA_DEPTH = 32
 
 LZMA_PROPS_SIZE = 5
 LZMA_SIZE_FIELD_SIZE = 8
@@ -35,7 +35,21 @@ def lzma_filters(
     lp: int = LZMA_LP,
     pb: int = LZMA_PB,
     dict_size: int = LZMA_DICT_SIZE,
+    nice_len: int = LZMA_NICE_LEN,
+    depth: int = LZMA_DEPTH,
 ) -> list[dict[str, int]]:
+    # The device rejects an image it cannot allocate buffers for, so catch it here
+    # rather than at flash time.
+    if lc + lp > LZMA_MAX_LC_PLUS_LP:
+        raise ValueError(
+            f"lc + lp must be at most {LZMA_MAX_LC_PLUS_LP}, got {lc} + {lp}"
+        )
+
+    if dict_size > LZMA_MAX_DICT_SIZE:
+        raise ValueError(
+            f"dict_size must be at most {LZMA_MAX_DICT_SIZE}, got {dict_size}"
+        )
+
     return [
         {
             "id": lzma.FILTER_LZMA1,
@@ -43,8 +57,28 @@ def lzma_filters(
             "lp": lp,
             "pb": pb,
             "dict_size": dict_size,
+            "mode": lzma.MODE_NORMAL,
+            "mf": lzma.MF_BT4,
+            "nice_len": nice_len,
+            "depth": depth,
         }
     ]
+
+
+def ends_with_end_marker(container: bytes) -> bool:
+    """Check that an `.lzma` container's stream terminates with an end marker."""
+    # `eof` alone is not enough: the decompressor stops at the declared size and never
+    # looks for the marker. Declaring the size unknown again forces it to rely on one.
+    probe = (
+        container[:LZMA_PROPS_SIZE]
+        + b"\xff" * LZMA_SIZE_FIELD_SIZE
+        + container[LZMA_HEADER_SIZE:]
+    )
+
+    decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
+    decompressor.decompress(probe)
+
+    return decompressor.eof
 
 
 def lzma_compress(data: bytes, **kwargs: int) -> bytes:
@@ -55,11 +89,18 @@ def lzma_compress(data: bytes, **kwargs: int) -> bytes:
 
     # Python writes an unknown-size marker into the 8 byte size field. The bootloader
     # skips the field entirely, but `commander` writes the real size, so we match it.
-    return (
+    container = (
         compressed[:LZMA_PROPS_SIZE]
         + len(data).to_bytes(LZMA_SIZE_FIELD_SIZE, "little")
         + compressed[LZMA_HEADER_SIZE:]
     )
+
+    # The bootloader requires `LZMA_STATUS_FINISHED_WITH_MARK` and fails the update
+    # otherwise, after having already flashed past the end of the payload.
+    if not ends_with_end_marker(container):
+        raise ValidationError("LZMA stream does not end with an end marker")
+
+    return container
 
 
 def lzma_decompress(data: bytes) -> bytes:

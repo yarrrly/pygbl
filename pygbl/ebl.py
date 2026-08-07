@@ -219,14 +219,9 @@ def serialize_tag(tag: EBLTagBase) -> bytes:
 class EBLImage:
     tags: list[EBLTagBase]
 
-    # Bytes following the end tag: the padding that aligns the image to a 64 byte
-    # boundary, and for some vendors an entire second firmware payload appended after
-    # it. Outside of the CRC and preserved verbatim so that images round-trip
-    # byte-for-byte.
-    trailing_data: bytes = b""
-
     @classmethod
-    def from_bytes(cls, data: bytes, *, validate: bool = True) -> EBLImage:
+    def deserialize(cls, data: bytes, *, validate: bool = True) -> tuple[Self, bytes]:
+        """Parse an image, returning it and whatever followed its end tag."""
         data = bytes(data)
         tags: list[EBLTagBase] = []
         offset = 0
@@ -253,21 +248,26 @@ class EBLImage:
             if tag_id == EBLTagId.END:
                 break
 
-        image = cls(tags=tags, trailing_data=data[offset:])
+        image = cls(tags=tags)
 
         if validate:
             image.validate()
 
-        return image
+        return image, data[offset:]
+
+    @classmethod
+    def from_bytes(cls, data: bytes, *, validate: bool = True) -> Self:
+        """Parse an image, discarding anything that followed its end tag."""
+        return cls.deserialize(data, validate=validate)[0]
 
     def serialize_tags(self) -> bytes:
         """Serialize only the tag region, which is what the CRC covers."""
         return b"".join(serialize_tag(t) for t in self.tags)
 
-    def serialize(self, *, block_size: int = 1, padding: bytes = b"\xff") -> bytes:
-        return pad_to_multiple(
-            self.serialize_tags() + self.trailing_data, block_size, padding
-        )
+    def serialize(
+        self, *, block_size: int = EBL_BLOCK_SIZE, padding: bytes = b"\xff"
+    ) -> bytes:
+        return pad_to_multiple(self.serialize_tags(), block_size, padding)
 
     def validate(self) -> None:
         if not self.tags:
@@ -308,9 +308,7 @@ class EBLImage:
         placeholder = type(self)(tags=[*tags, EBLEnd(crc=0)])
         crc = zlib.crc32(placeholder.serialize_tags()[:-4]) & 0xFFFFFFFF
 
-        return type(self)(
-            tags=[*tags, EBLEnd(crc=crc)], trailing_data=self.trailing_data
-        )
+        return type(self)(tags=[*tags, EBLEnd(crc=crc)])
 
 
 def _parse_tag(tag_id: int, payload: bytes) -> EBLTagBase:
