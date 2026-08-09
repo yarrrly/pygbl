@@ -137,7 +137,7 @@ def test_compress_replaces_program_data_tags(
     compressed = build_image().compress(algorithm)
 
     assert len(compressed.get_tags(tag_type)) == 2
-    assert compressed.get_tags(GBL3EraseProg) == []
+    assert compressed.get_tags(GBL3EraseProg, allow_missing=True) == []
     assert [t.address for t in compressed.get_tags(tag_type)] == [0x8006000, 0x8106000]
 
 
@@ -177,7 +177,7 @@ def test_compress_handles_program_data1() -> None:
 
     compressed = variant.compress(GBL3Compression.LZMA)
 
-    assert compressed.get_tags(GBL3Prog) == []
+    assert compressed.get_tags(GBL3Prog, allow_missing=True) == []
     assert len(compressed.get_tags(GBL3ProgLZMA)) == 2
 
 

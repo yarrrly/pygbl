@@ -534,7 +534,7 @@ class GBL4Image:
     def serialize(self) -> bytes:
         return serialize_tag(self.root)
 
-    def get_tags(self, tag_type: type[T]) -> list[T]:
+    def get_tags(self, tag_type: type[T], *, allow_missing: bool = False) -> list[T]:
         """Every tag of a type, at any depth."""
         found: list[T] = []
 
@@ -548,20 +548,10 @@ class GBL4Image:
 
         walk([self.root])
 
-        return found
-
-    def find_first_tag(self, tag_type: type[T]) -> T | None:
-        tags = self.get_tags(tag_type)
-
-        return tags[0] if tags else None
-
-    def get_first_tag(self, tag_type: type[T]) -> T:
-        tag = self.find_first_tag(tag_type)
-
-        if tag is None:
+        if not found and not allow_missing:
             raise KeyError(f"No {tag_type.__name__} tag exists")
 
-        return tag
+        return found
 
-    def has_tag(self, tag_type: type[Any]) -> bool:
-        return self.find_first_tag(tag_type) is not None
+    def get_first_tag(self, tag_type: type[T]) -> T:
+        return self.get_tags(tag_type)[0]

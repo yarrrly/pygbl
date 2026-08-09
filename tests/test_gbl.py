@@ -219,9 +219,10 @@ def test_tag_lookup_helpers() -> None:
 
     assert image.get_tags(GBL3EraseProg) == [first, second]
     assert image.get_first_tag(GBL3EraseProg) == first
-    assert image.find_first_tag(GBL3Metadata) is None
-    assert image.has_tag(GBL3EraseProg)
-    assert not image.has_tag(GBL3Metadata)
+    assert image.get_tags(GBL3Metadata, allow_missing=True) == []
+
+    with pytest.raises(KeyError, match="No GBL3Metadata tag exists"):
+        image.get_tags(GBL3Metadata)
 
     with pytest.raises(KeyError, match="No GBL3Metadata tag exists"):
         image.get_first_tag(GBL3Metadata)

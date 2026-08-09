@@ -286,22 +286,16 @@ class EBLImage:
                 f"Image CRC-32 is invalid: expected {VALID_CRC32:#010x}, got {crc:#010x}"
             )
 
-    def get_tags(self, tag_type: type[T]) -> list[T]:
-        return [t for t in self.tags if type(t) is tag_type]
+    def get_tags(self, tag_type: type[T], *, allow_missing: bool = False) -> list[T]:
+        tags: list[T] = [t for t in self.tags if type(t) is tag_type]
 
-    def find_first_tag(self, tag_type: type[T]) -> T | None:
-        return next((t for t in self.tags if type(t) is tag_type), None)
-
-    def get_first_tag(self, tag_type: type[T]) -> T:
-        tag = self.find_first_tag(tag_type)
-
-        if tag is None:
+        if not tags and not allow_missing:
             raise KeyError(f"No {tag_type.__name__} tag exists")
 
-        return tag
+        return tags
 
-    def has_tag(self, tag_type: type[Any]) -> bool:
-        return self.find_first_tag(tag_type) is not None
+    def get_first_tag(self, tag_type: type[T]) -> T:
+        return self.get_tags(tag_type)[0]
 
     def regenerate_crc(self) -> EBLImage:
         tags = [t for t in self.tags if not isinstance(t, EBLEnd)]

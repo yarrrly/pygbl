@@ -86,7 +86,7 @@ def rebuild(name: str) -> GBL3Image:
     theirs = commander_gbl(name)
     builder = (
         build_bootloader_gbl3
-        if theirs.has_tag(GBL3Bootloader)
+        if theirs.get_tags(GBL3Bootloader, allow_missing=True)
         else build_application_gbl3
     )
 
@@ -205,7 +205,7 @@ def test_application_gbl_without_metadata() -> None:
     with elf_path(APPLICATION).open("rb") as f:
         image = build_application_gbl3(f)
 
-    assert image.find_first_tag(GBL3Metadata) is None
+    assert image.get_tags(GBL3Metadata, allow_missing=True) == []
     assert image.get_first_tag(GBL3Header).type == GBL3Type.NONE
     image.validate()
 

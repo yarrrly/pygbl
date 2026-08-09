@@ -63,7 +63,7 @@ def test_dispatches_to_gbl4(path: pathlib.Path) -> None:
 @pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
 def test_no_unknown_tags(path: pathlib.Path) -> None:
     """Every tag in a real image should be one we model."""
-    assert load(path).get_tags(GBL4UnknownTag) == []
+    assert load(path).get_tags(GBL4UnknownTag, allow_missing=True) == []
 
 
 @pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
@@ -130,7 +130,7 @@ def test_hash_values_are_variable_length(path: pathlib.Path) -> None:
 @pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
 def test_padding_is_preserved(path: pathlib.Path) -> None:
     """`PAD` has the container bit set but holds raw bytes, so it must stay opaque."""
-    for pad in load(path).get_tags(GBL4Pad):
+    for pad in load(path).get_tags(GBL4Pad, allow_missing=True):
         assert pad.data == pad.serialize_payload()
 
 
