@@ -194,7 +194,9 @@ def test_real_images_respect_the_bootloader_limits(path: pathlib.Path) -> None:
     """Every LZMA tag in the wild fits the decoder's 10 KiB probs and 8 KiB dictionary."""
     image = pygbl.parse_firmware_image(path.read_bytes())
 
-    if not isinstance(image, GBL3Image) or not image.get_tags(GBL3ProgLZMA):
+    if not isinstance(image, GBL3Image) or not image.get_tags(
+        GBL3ProgLZMA, allow_missing=True
+    ):
         pytest.skip("no LZMA tags")
 
     for tag in image.get_tags(GBL3ProgLZMA):
@@ -254,8 +256,12 @@ def test_lzma_props_match(case: tuple[str, GBL3Compression | None]) -> None:
     """The props bytes are what the device reads to size its decoder buffers."""
     ours, theirs = build(*case)
 
-    assert [t.data[:LZMA_PROPS_SIZE] for t in ours.get_tags(GBL3ProgLZMA)] == [
-        t.data[:LZMA_PROPS_SIZE] for t in theirs.get_tags(GBL3ProgLZMA)
+    assert [
+        t.data[:LZMA_PROPS_SIZE]
+        for t in ours.get_tags(GBL3ProgLZMA, allow_missing=True)
+    ] == [
+        t.data[:LZMA_PROPS_SIZE]
+        for t in theirs.get_tags(GBL3ProgLZMA, allow_missing=True)
     ]
 
 
@@ -267,4 +273,7 @@ def test_both_encoders_write_lzma_end_markers(
     ours, theirs = build(*case)
 
     for image in (ours, theirs):
-        assert all(ends_with_end_marker(t.data) for t in image.get_tags(GBL3ProgLZMA))
+        assert all(
+            ends_with_end_marker(t.data)
+            for t in image.get_tags(GBL3ProgLZMA, allow_missing=True)
+        )

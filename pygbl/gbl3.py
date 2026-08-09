@@ -729,28 +729,22 @@ class GBL3Image:
                 f"Image CRC-32 is invalid: expected {VALID_CRC32:#010x}, got {crc:#010x}"
             )
 
-    def get_tags(self, tag_type: type[T]) -> list[T]:
-        return [t for t in self.tags if type(t) is tag_type]
+    def get_tags(self, tag_type: type[T], *, allow_missing: bool = False) -> list[T]:
+        tags: list[T] = [t for t in self.tags if type(t) is tag_type]
 
-    def find_first_tag(self, tag_type: type[T]) -> T | None:
-        return next((t for t in self.tags if type(t) is tag_type), None)
-
-    def get_first_tag(self, tag_type: type[T]) -> T:
-        tag = self.find_first_tag(tag_type)
-
-        if tag is None:
+        if not tags and not allow_missing:
             raise KeyError(f"No {tag_type.__name__} tag exists")
 
-        return tag
+        return tags
 
-    def has_tag(self, tag_type: type[Any]) -> bool:
-        return self.find_first_tag(tag_type) is not None
+    def get_first_tag(self, tag_type: type[T]) -> T:
+        return self.get_tags(tag_type)[0]
 
     def get_metadata(self) -> bytes | None:
         """The metadata tag contents, if the image has one. Opaque to the bootloader."""
-        tag = self.find_first_tag(GBL3Metadata)
+        metadata = self.get_tags(GBL3Metadata, allow_missing=True)
 
-        return None if tag is None else tag.metadata
+        return metadata[0].metadata if metadata else None
 
     def regenerate_crc(self) -> GBL3Image:
         tags = [t for t in self.tags if not isinstance(t, GBL3End)]
@@ -793,10 +787,12 @@ class GBL3Image:
         return type(self)(tags=[*tags, GBL3Signature(r=r, s=s)]).regenerate_crc()
 
     def verify_signature(self, public_key: ec.EllipticCurvePublicKey) -> bool:
-        signature = self.find_first_tag(GBL3Signature)
+        signatures = self.get_tags(GBL3Signature, allow_missing=True)
 
-        if signature is None:
+        if not signatures:
             raise KeyError("Image is not signed")
+
+        signature = signatures[0]
 
         return verify_digest(
             public_key, self.signing_digest(), signature.r, signature.s
@@ -848,11 +844,12 @@ class GBL3Image:
 
         A signature covers the ciphertext, so it cannot carry over to the plaintext.
         """
-        init = self.find_first_tag(GBL3EncryptionInitAesCcm)
+        inits = self.get_tags(GBL3EncryptionInitAesCcm, allow_missing=True)
 
-        if init is None:
+        if not inits:
             raise KeyError("Image is not encrypted")
 
+        init = inits[0]
         ciphertext = b"".join(t.ciphertext for t in self.get_tags(GBL3EncryptedData))
         plaintext = aes_ctr_crypt(key, init.nonce, ciphertext)
         tags, _ = parse_tag_stream(plaintext, stop_at_end=False)
@@ -901,10 +898,12 @@ class GBL3Image:
         return type(self)(tags=tags).regenerate_crc()
 
     def is_combined_bootloader_app(self) -> bool:
-        app_info = self.find_first_tag(GBL3ApplicationInfo)
+        app_infos = self.get_tags(GBL3ApplicationInfo, allow_missing=True)
 
-        if app_info is None or not self.has_tag(GBL3Bootloader):
+        if not app_infos or not self.get_tags(GBL3Bootloader, allow_missing=True):
             return False
+
+        app_info = app_infos[0]
 
         return bool(
             GBL3ApplicationType.BOOTLOADER in app_info.type
@@ -941,10 +940,13 @@ class GBL3Image:
 
     def combine_bootloader_app(self, other: GBL3Image) -> GBL3Image:
         """Combine a bootloader image and an application image into a single image."""
-        if self.has_tag(GBL3Bootloader) and other.has_tag(GBL3Bootloader):
+        ours = self.get_tags(GBL3Bootloader, allow_missing=True)
+        theirs = other.get_tags(GBL3Bootloader, allow_missing=True)
+
+        if ours and theirs:
             raise ValueError("Both images contain bootloaders")
 
-        if not self.has_tag(GBL3Bootloader) and not other.has_tag(GBL3Bootloader):
+        if not ours and not theirs:
             raise ValueError("Neither image contains a bootloader")
 
         header = self.get_first_tag(GBL3Header)
@@ -955,7 +957,7 @@ class GBL3Image:
         if header.type != GBL3Type.NONE:
             raise ValueError("Cannot combine signed or encrypted images")
 
-        bootloader_image = self if self.has_tag(GBL3Bootloader) else other
+        bootloader_image = self if ours else other
         application = other if bootloader_image is self else self
         app_info = application.get_first_tag(GBL3ApplicationInfo)
 

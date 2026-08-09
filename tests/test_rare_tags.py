@@ -171,4 +171,4 @@ def test_prog_survives_a_roundtrip() -> None:
 
     assert reparsed == image
     assert isinstance(reparsed.get_first_tag(GBL3Prog), GBL3Prog)
-    assert reparsed.find_first_tag(GBL3EraseProg) is None
+    assert reparsed.get_tags(GBL3EraseProg, allow_missing=True) == []

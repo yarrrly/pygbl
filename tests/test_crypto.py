@@ -256,6 +256,6 @@ def test_decrypt_drops_signature_and_flags() -> None:
     sealed = image.encrypt(KEY, nonce=NONCE).sign(PRIVATE_KEY)
     decrypted = sealed.decrypt(KEY)
 
-    assert decrypted.find_first_tag(GBL3Signature) is None
+    assert decrypted.get_tags(GBL3Signature, allow_missing=True) == []
     assert decrypted.get_first_tag(GBL3Header).type == GBL3Type.NONE
     assert decrypted.serialize() == image.serialize()
