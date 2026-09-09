@@ -13,6 +13,8 @@ import pytest
 from pygbl import (
     GBL4_MAGIC,
     GBL4BundleVersion,
+    GBL4Certificate,
+    GBL4EncryptionScheme,
     GBL4Feature,
     GBL4Image,
     GBL4Manifest,
@@ -30,6 +32,7 @@ from pygbl import (
     GBL4UpdateProcess,
     HashValue,
     ParseError,
+    ValidationError,
     parse_firmware_image,
 )
 
@@ -92,7 +95,13 @@ def test_manifest_fields(path: pathlib.Path) -> None:
 
     info = image.get_first_tag(GBL4ManifestInfo)
     assert GBL4Feature.COMPRESSION in info.features
-    assert GBL4Feature.ENCRYPTION_AESCCM in info.features
+
+    # Encryption is per vendor: Hue encrypts its sections, IKEA ships them in the clear
+    encrypted = GBL4Feature.ENCRYPTION_AESCCM in info.features
+    schemes = {i.encryption_scheme for i in image.get_tags(GBL4MemorySectionInfo)}
+    assert schemes == (
+        {GBL4EncryptionScheme.AES_CCM} if encrypted else {GBL4EncryptionScheme.NONE}
+    )
 
     bundle = image.get_first_tag(GBL4BundleVersion)
     assert len(bundle.product_id) == 16
@@ -132,6 +141,50 @@ def test_padding_is_preserved(path: pathlib.Path) -> None:
     """`PAD` has the container bit set but holds raw bytes, so it must stay opaque."""
     for pad in load(path).get_tags(GBL4Pad, allow_missing=True):
         assert pad.data == pad.serialize_payload()
+
+
+@pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
+def test_content_hash_verifies(path: pathlib.Path) -> None:
+    assert load(path).verify_content_hash()
+
+
+@pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
+def test_memory_sections_verify(path: pathlib.Path) -> None:
+    assert load(path).verify_memory_sections()
+
+
+@pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
+def test_updates_resolve_to_sections(path: pathlib.Path) -> None:
+    image = load(path)
+
+    for update in image.get_tags(GBL4UpdateMemorySection):
+        section = image.memory_section_at(update.memory_section_position)
+        assert section in image.get_tags(GBL4MemorySection)
+
+
+@pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
+def test_signature_verifies_when_a_certificate_is_present(path: pathlib.Path) -> None:
+    """Hue images are signed but ship no certificate, so the key has to come from
+    elsewhere. Images that do carry one verify against it."""
+    image = load(path)
+
+    if image.get_tags(GBL4Certificate, allow_missing=True):
+        assert image.verify_signature()
+    else:
+        with pytest.raises(KeyError, match="no certificate"):
+            image.verify_signature()
+
+
+@pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
+def test_encrypted_sections_are_not_expanded(path: pathlib.Path) -> None:
+    image = load(path)
+
+    for section in image.get_tags(GBL4MemorySection):
+        if section.info.encryption_scheme == GBL4EncryptionScheme.NONE:
+            assert len(image.plain_image(section)) > 0
+        else:
+            with pytest.raises(ValidationError, match="encrypted"):
+                image.plain_image(section)
 
 
 def test_hash_value_roundtrip() -> None:

@@ -16,6 +16,7 @@ from pygbl import (
     GBL3Type,
     MissingDependencyError,
 )
+from tests.test_gbl4_verification import APPLICATION, build_image as build_gbl4_image
 
 PAYLOAD = bytes((i * 3) % 211 for i in range(4096))
 CRYPTO_EXTRA = r"pygbl\[crypto\]"
@@ -114,3 +115,21 @@ def test_lzma_needs_nothing() -> None:
         assert image.compress(GBL3Compression.LZMA).decompress().serialize() == (
             image.serialize()
         )
+
+
+def test_gbl4_verify_signature_needs_cryptography() -> None:
+    image = build_gbl4_image([APPLICATION])
+
+    with (
+        patch("pygbl.crypto.HAVE_CRYPTOGRAPHY", False),
+        pytest.raises(MissingDependencyError, match=CRYPTO_EXTRA),
+    ):
+        image.verify_signature()
+
+
+def test_gbl4_hashes_do_not_need_cryptography() -> None:
+    image = build_gbl4_image([APPLICATION])
+
+    with patch("pygbl.crypto.HAVE_CRYPTOGRAPHY", False):
+        assert image.verify_content_hash()
+        assert image.verify_memory_sections()

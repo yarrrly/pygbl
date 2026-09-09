@@ -59,6 +59,18 @@ def aes_ctr_crypt(
     return encryptor.update(data) + encryptor.finalize()
 
 
+def load_public_key(key: bytes) -> ec.EllipticCurvePublicKey:
+    """Load a public key stored as the raw `x || y` pair the certificates carry."""
+    require_cryptography()
+
+    if len(key) != 2 * SIGNATURE_COMPONENT_SIZE:
+        raise ValueError(
+            f"Key must be {2 * SIGNATURE_COMPONENT_SIZE} bytes, got {len(key)}"
+        )
+
+    return ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), b"\x04" + key)
+
+
 def sign_digest(
     private_key: ec.EllipticCurvePrivateKey, digest: bytes
 ) -> tuple[bytes, bytes]:

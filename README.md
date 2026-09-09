@@ -130,6 +130,31 @@ for info in image.get_tags(GBL4MemorySectionInfo):
     print(info.compression_scheme, info.encryption_scheme, info.nonce.hex())
 ```
 
+The manifest binds the rest of the file together, and those bindings can be checked
+before flashing anything:
+
+```python
+assert image.verify_content_hash()     # the payload after the manifest
+assert image.verify_memory_sections()  # each section against the update that names it
+assert image.verify_signature()        # the manifest, against its own certificate
+```
+
+`verify_signature` with no argument uses the key in the image's `CERTIFICATE` tag, which
+shows the manifest has not been altered since signing, not that a vendor you trust
+signed it. Pass the key you trust to check that; images that carry no certificate, as
+Philips Hue's do not, require one.
+
+Sections expand to the image the device flashes:
+
+```python
+for section in image.get_tags(GBL4MemorySection):
+    print(len(image.plain_image(section)))
+```
+
+An encrypted section raises `ValidationError`: the key lives in the device, so the blob
+cannot be expanded off-device. `verify_memory_sections` still checks such a section
+against the digest the manifest holds for it.
+
 Reading and writing are supported; building a v4 image from an ELF is not, the ELF
 helpers are GBLv3 only.
 

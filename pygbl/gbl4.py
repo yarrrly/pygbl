@@ -9,9 +9,16 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-from typing import Any, Self, Union
+import hashlib
+from typing import TYPE_CHECKING, Any, Self, Union
 
-from pygbl.types import ParseError, T
+from pygbl.compression import lz4_decompress, lzma_decompress
+from pygbl.crypto import load_public_key, verify_digest
+from pygbl.types import ParseError, T, ValidationError
+
+if TYPE_CHECKING:
+    # Only needed for annotations: signature verification is an optional feature
+    from cryptography.hazmat.primitives.asymmetric import ec
 
 # Root tag `0x84A617EB`, from the same `A617EB` family as v3's header but with version
 # byte 0x84 instead of 0x03
@@ -52,6 +59,29 @@ class GBL4TargetMemory(enum.IntEnum):
     OSPI2 = 2
 
 
+class GBL4HashType(enum.IntEnum):
+    """The `hash_type` word of a `HashValue` holding a digest."""
+
+    SHA256 = 1
+
+
+class GBL4SignatureType(enum.IntEnum):
+    """The same word, when the `HashValue` holds a signature instead of a digest."""
+
+    ECDSA_P256 = 2
+
+
+class GBL4CompressionScheme(enum.IntEnum):
+    NONE = 0
+    LZ4 = 1
+    LZMA = 2
+
+
+class GBL4EncryptionScheme(enum.IntEnum):
+    NONE = 0
+    AES_CCM = 1
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class HashValue:
     """A hash or signature: a type word followed by the value.
@@ -73,6 +103,17 @@ class HashValue:
 
     def serialize(self) -> bytes:
         return self.hash_type.to_bytes(4, "little") + self.value
+
+    def digest(self, data: bytes) -> bytes:
+        """Hash `data` with the algorithm this value declares."""
+        if self.hash_type != GBL4HashType.SHA256:
+            raise ValidationError(f"Unsupported hash type {self.hash_type:#x}")
+
+        return hashlib.sha256(data).digest()
+
+    def matches(self, data: bytes) -> bool:
+        """Whether `data` hashes to this value."""
+        return self.digest(data) == self.value
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -128,7 +169,25 @@ class GBL4UpdateProcess(_GBL4Container):
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class GBL4MemorySection(_GBL4Container):
+    """One update payload: a fixed info header followed by the image blob."""
+
     tag_id: int = GBL4TagId.MEMORY_SECTION
+
+    @property
+    def info(self) -> GBL4MemorySectionInfo:
+        for child in self.children:
+            if isinstance(child, GBL4MemorySectionInfo):
+                return child
+
+        raise ParseError("Memory section has no info tag")
+
+    @property
+    def blob(self) -> GBL4MemorySectionBlob:
+        for child in self.children:
+            if isinstance(child, GBL4MemorySectionBlob):
+                return child
+
+        raise ParseError("Memory section has no blob tag")
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -164,6 +223,10 @@ class GBL4Certificate(GBL4TagBase):
             + self.version.to_bytes(4, "little")
             + self.signature
         )
+
+    def public_key(self) -> ec.EllipticCurvePublicKey:
+        """The certified key, as a `cryptography` object."""
+        return load_public_key(self.key)
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -555,3 +618,158 @@ class GBL4Image:
 
     def get_first_tag(self, tag_type: type[T]) -> T:
         return self.get_tags(tag_type)[0]
+
+    def root_child_offsets(self) -> list[tuple[GBL4TagBase, int]]:
+        """Each top-level tag with its offset from the start of the image.
+
+        The manifest addresses payloads by absolute file offset, so the offsets have to
+        include the root tag's own 8 byte header.
+        """
+        offsets: list[tuple[GBL4TagBase, int]] = []
+        offset = 8
+
+        for child in self.root.children:
+            offsets.append((child, offset))
+            offset += 8 + len(child.serialize_payload())
+
+        return offsets
+
+    def memory_section_at(self, position: int) -> GBL4MemorySection:
+        """The memory section a `memory_section_position` points at."""
+        for child, offset in self.root_child_offsets():
+            if offset == position and isinstance(child, GBL4MemorySection):
+                return child
+
+        raise KeyError(f"No memory section at offset {position:#x}")
+
+    def content(self) -> bytes:
+        """The bytes `CONTENT_HASH` covers: everything after the manifest tag."""
+        children = self.root.children
+
+        for index, child in enumerate(children):
+            if isinstance(child, GBL4Manifest):
+                return b"".join(serialize_tag(t) for t in children[index + 1 :])
+
+        raise KeyError("Image has no manifest")
+
+    def verify_content_hash(self) -> bool:
+        """Whether the payload following the manifest hashes to `CONTENT_HASH`."""
+        return self.get_first_tag(GBL4ContentHash).hash.matches(self.content())
+
+    def verify_memory_sections(self) -> bool:
+        """Whether every update in the manifest matches the section it points at.
+
+        Each `UPDATE_MEMORY_SECTION` carries the digest of a whole `MEMORY_SECTION_INFO`
+        tag, header included, which in turn carries the digest of the image the section
+        expands to. The second half can only be checked when the section is one this
+        library can expand, so an encrypted section is verified as far as its info tag.
+        """
+        for update in self.get_tags(GBL4UpdateMemorySection):
+            try:
+                section = self.memory_section_at(update.memory_section_position)
+            except KeyError:
+                return False
+
+            if not update.hash.matches(serialize_tag(section.info)):
+                return False
+
+            if section.info.encryption_scheme != GBL4EncryptionScheme.NONE:
+                continue
+
+            plain = self.plain_image(section)
+
+            if len(plain) != update.plain_image_size:
+                return False
+
+            # A fixed 64 byte field holding a 32 byte digest, zero padded
+            if hashlib.sha256(plain).digest() != section.info.final_image_hash[:32]:
+                return False
+
+        return True
+
+    def plain_image(self, section: GBL4MemorySection) -> bytes:
+        """Expand a memory section into the image the device will flash."""
+        info = section.info
+
+        if info.encryption_scheme != GBL4EncryptionScheme.NONE:
+            raise ValidationError(
+                f"Memory section is encrypted with scheme {info.encryption_scheme:#x},"
+                f" which cannot be decrypted without the device's key"
+            )
+
+        data = section.blob.data
+
+        if info.compression_scheme == GBL4CompressionScheme.NONE:
+            return data
+
+        if info.compression_scheme == GBL4CompressionScheme.LZMA:
+            return lzma_decompress(data)
+
+        if info.compression_scheme == GBL4CompressionScheme.LZ4:
+            return lz4_decompress(data)
+
+        raise ValidationError(
+            f"Unsupported compression scheme {info.compression_scheme:#x}"
+        )
+
+    def signing_content(self) -> bytes:
+        """The manifest tags an `ECDSA_P256` signature covers.
+
+        Everything in the manifest after the signature tag itself, which is the manifest
+        info, the bundle version, the content hash and the update process. The
+        certificate sits before the signature and is not part of the signed range.
+        """
+        manifest = self.get_first_tag(GBL4Manifest)
+        children = manifest.children
+
+        for index, child in enumerate(children):
+            if isinstance(child, GBL4Signature):
+                return b"".join(serialize_tag(t) for t in children[index + 1 :])
+
+        raise KeyError("Image is not signed")
+
+    def signing_digest(self) -> bytes:
+        return hashlib.sha256(self.signing_content()).digest()
+
+    def verify_signature(
+        self, public_key: ec.EllipticCurvePublicKey | None = None
+    ) -> bool:
+        """Whether the manifest signature is valid.
+
+        With no key, the one in the image's own certificate is used. That checks the
+        manifest has not been altered since it was signed, not that a vendor you trust
+        signed it: pass the key you trust to check that.
+        """
+        signatures = self.get_tags(GBL4Signature, allow_missing=True)
+
+        if not signatures:
+            raise KeyError("Image is not signed")
+
+        signature = signatures[0].signature
+
+        if signature.hash_type != GBL4SignatureType.ECDSA_P256:
+            raise ValidationError(
+                f"Unsupported signature type {signature.hash_type:#x}"
+            )
+
+        if len(signature.value) != 64:
+            raise ValidationError(
+                f"ECDSA P-256 signature must be 64 bytes, got {len(signature.value)}"
+            )
+
+        if public_key is None:
+            certificates = self.get_tags(GBL4Certificate, allow_missing=True)
+
+            if not certificates:
+                raise KeyError(
+                    "Image has no certificate, so a public key must be passed"
+                )
+
+            public_key = certificates[0].public_key()
+
+        return verify_digest(
+            public_key,
+            self.signing_digest(),
+            signature.value[:32],
+            signature.value[32:],
+        )
