@@ -164,15 +164,13 @@ def test_updates_resolve_to_sections(path: pathlib.Path) -> None:
 
 @pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)
 def test_signature_verifies_when_a_certificate_is_present(path: pathlib.Path) -> None:
-    """Hue images are signed but ship no certificate, so the key has to come from
-    elsewhere. Images that do carry one verify against it."""
+    """Hue images are signed but ship no certificate, so their key has to come from
+    elsewhere. Images that do carry one verify against its key."""
     image = load(path)
+    certificates = image.get_tags(GBL4Certificate, allow_missing=True)
 
-    if image.get_tags(GBL4Certificate, allow_missing=True):
-        assert image.verify_signature()
-    else:
-        with pytest.raises(KeyError, match="no certificate"):
-            image.verify_signature()
+    if certificates:
+        assert image.verify_signature(certificates[0].public_key())
 
 
 @pytest.mark.parametrize("path", IMAGES, ids=lambda p: p.name)

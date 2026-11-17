@@ -731,14 +731,12 @@ class GBL4Image:
     def signing_digest(self) -> bytes:
         return hashlib.sha256(self.signing_content()).digest()
 
-    def verify_signature(
-        self, public_key: ec.EllipticCurvePublicKey | None = None
-    ) -> bool:
-        """Whether the manifest signature is valid.
+    def verify_signature(self, public_key: ec.EllipticCurvePublicKey) -> bool:
+        """Whether the manifest signature is valid under `public_key`.
 
-        With no key, the one in the image's own certificate is used. That checks the
-        manifest has not been altered since it was signed, not that a vendor you trust
-        signed it: pass the key you trust to check that.
+        The image's own `CERTIFICATE` tag is not used: anyone who can change the
+        manifest can also replace the certificate and re-sign, so only a key obtained
+        elsewhere shows who signed the image.
         """
         signatures = self.get_tags(GBL4Signature, allow_missing=True)
 
@@ -756,16 +754,6 @@ class GBL4Image:
             raise ValidationError(
                 f"ECDSA P-256 signature must be 64 bytes, got {len(signature.value)}"
             )
-
-        if public_key is None:
-            certificates = self.get_tags(GBL4Certificate, allow_missing=True)
-
-            if not certificates:
-                raise KeyError(
-                    "Image has no certificate, so a public key must be passed"
-                )
-
-            public_key = certificates[0].public_key()
 
         return verify_digest(
             public_key,

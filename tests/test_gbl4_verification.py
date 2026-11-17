@@ -184,7 +184,9 @@ def fill_positions(image: GBL4Image) -> GBL4Image:
     return replace_tag(image, process, GBL4UpdateProcess(children=children))
 
 
-def sign_image(image: GBL4Image) -> GBL4Image:
+def sign_image(
+    image: GBL4Image, key: ec.EllipticCurvePrivateKey = PRIVATE_KEY
+) -> GBL4Image:
     """Fill in the content hash, then sign everything the signature covers."""
     content_hash = image.get_first_tag(GBL4ContentHash)
     image = replace_tag(
@@ -198,7 +200,7 @@ def sign_image(image: GBL4Image) -> GBL4Image:
         ),
     )
 
-    r, s = sign_digest(PRIVATE_KEY, image.signing_digest())
+    r, s = sign_digest(key, image.signing_digest())
     signature = image.get_first_tag(GBL4Signature)
 
     return replace_tag(
@@ -271,7 +273,7 @@ def test_verification_passes(image: GBL4Image, bundle: GBL4Image) -> None:
     for subject in (image, bundle):
         assert subject.verify_content_hash()
         assert subject.verify_memory_sections()
-        assert subject.verify_signature()
+        assert subject.verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_content_is_everything_after_the_manifest(image: GBL4Image) -> None:
@@ -330,7 +332,7 @@ def test_signature_notices_a_changed_manifest(image: GBL4Image) -> None:
     info = image.get_first_tag(GBL4ManifestInfo)
     tampered = replace_tag(image, info, dataclasses.replace(info, version=0x05000000))
 
-    assert not tampered.verify_signature()
+    assert not tampered.verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_signature_against_an_explicit_key(image: GBL4Image) -> None:
@@ -339,13 +341,26 @@ def test_signature_against_an_explicit_key(image: GBL4Image) -> None:
 
 
 def test_signature_without_a_certificate() -> None:
-    """A Hue image is signed but carries no certificate, so a key has to be supplied."""
-    unsigned_by_us = build_image([APPLICATION], certificate=False)
+    """A Hue image is signed but carries no certificate; the key comes from elsewhere."""
+    image = build_image([APPLICATION], certificate=False)
 
-    with pytest.raises(KeyError, match="no certificate"):
-        unsigned_by_us.verify_signature()
+    assert image.verify_signature(PRIVATE_KEY.public_key())
 
-    assert unsigned_by_us.verify_signature(PRIVATE_KEY.public_key())
+
+def test_replaced_certificate_does_not_vouch_for_the_image(image: GBL4Image) -> None:
+    """Swapping in your own certificate and re-signing is consistent, but not trusted."""
+    certificate = image.get_first_tag(GBL4Certificate)
+    forged = sign_image(
+        replace_tag(
+            image,
+            certificate,
+            dataclasses.replace(certificate, key=raw_public_key(OTHER_KEY)),
+        ),
+        OTHER_KEY,
+    )
+
+    assert forged.verify_signature(forged.get_first_tag(GBL4Certificate).public_key())
+    assert not forged.verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_unsigned_image_raises(image: GBL4Image) -> None:
@@ -364,7 +379,7 @@ def test_unsigned_image_raises(image: GBL4Image) -> None:
     )
 
     with pytest.raises(KeyError, match="not signed"):
-        stripped.verify_signature()
+        stripped.verify_signature(PRIVATE_KEY.public_key())
 
     with pytest.raises(KeyError, match="not signed"):
         stripped.signing_content()
@@ -379,7 +394,7 @@ def test_unknown_signature_type_is_refused(image: GBL4Image) -> None:
     )
 
     with pytest.raises(ValidationError, match="Unsupported signature type"):
-        tampered.verify_signature()
+        tampered.verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_unknown_hash_type_is_refused(image: GBL4Image) -> None:
@@ -434,7 +449,7 @@ def test_encrypted_sections_are_still_bound_to_the_manifest() -> None:
 
     assert encrypted.verify_memory_sections()
     assert encrypted.verify_content_hash()
-    assert encrypted.verify_signature()
+    assert encrypted.verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_plain_image_refuses_an_unknown_compression_scheme(image: GBL4Image) -> None:
@@ -537,7 +552,7 @@ def test_signature_of_the_wrong_length_is_refused(image: GBL4Image) -> None:
     )
 
     with pytest.raises(ValidationError, match="must be 64 bytes"):
-        tampered.verify_signature()
+        tampered.verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_public_key_must_be_a_raw_point() -> None:

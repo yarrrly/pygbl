@@ -16,7 +16,11 @@ from pygbl import (
     GBL3Type,
     MissingDependencyError,
 )
-from tests.test_gbl4_verification import APPLICATION, build_image as build_gbl4_image
+from tests.test_gbl4_verification import (
+    APPLICATION,
+    PRIVATE_KEY,
+    build_image as build_gbl4_image,
+)
 
 PAYLOAD = bytes((i * 3) % 211 for i in range(4096))
 CRYPTO_EXTRA = r"pygbl\[crypto\]"
@@ -124,7 +128,7 @@ def test_gbl4_verify_signature_needs_cryptography() -> None:
         patch("pygbl.crypto.HAVE_CRYPTOGRAPHY", False),
         pytest.raises(MissingDependencyError, match=CRYPTO_EXTRA),
     ):
-        image.verify_signature()
+        image.verify_signature(PRIVATE_KEY.public_key())
 
 
 def test_gbl4_hashes_do_not_need_cryptography() -> None:
