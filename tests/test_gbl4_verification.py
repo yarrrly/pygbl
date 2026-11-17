@@ -325,7 +325,9 @@ def test_signature_covers_the_manifest_after_itself(image: GBL4Image) -> None:
 
     assert image.signing_content() == b"".join(serialize_tag(t) for t in after)
     # The certificate sits before the signature, so it is not covered
-    assert serialize_tag(image.get_first_tag(GBL4Certificate)) not in image.content()
+    certificate = serialize_tag(image.get_first_tag(GBL4Certificate))
+
+    assert certificate not in image.signing_content()
 
 
 def test_signature_notices_a_changed_manifest(image: GBL4Image) -> None:
@@ -361,6 +363,146 @@ def test_replaced_certificate_does_not_vouch_for_the_image(image: GBL4Image) -> 
 
     assert forged.verify_signature(forged.get_first_tag(GBL4Certificate).public_key())
     assert not forged.verify_signature(PRIVATE_KEY.public_key())
+
+
+def fill_certificate_slot(image: GBL4Image, tags: list[GBL4TagBase]) -> GBL4Image:
+    """Swap the unsigned certificate for other tags, padded to the same size.
+
+    Nothing after the slot moves, so the signature and every offset stay valid.
+    """
+    manifest = image.get_first_tag(GBL4Manifest)
+    certificate = image.get_first_tag(GBL4Certificate)
+    room = len(serialize_tag(certificate)) - sum(len(serialize_tag(t)) for t in tags)
+    children: list[GBL4TagBase] = []
+
+    for child in manifest.children:
+        if child is certificate:
+            children += [*tags, GBL4Pad(data=bytes(room - 8))]
+        else:
+            children.append(child)
+
+    return replace_tag(
+        image, manifest, dataclasses.replace(manifest, children=children)
+    )
+
+
+def content_hash_of(image: GBL4Image) -> GBL4ContentHash:
+    return GBL4ContentHash(
+        hash=HashValue(
+            hash_type=GBL4HashType.SHA256,
+            value=hashlib.sha256(image.content()).digest(),
+        )
+    )
+
+
+@pytest.mark.parametrize("blob_type", [GBL4MemorySectionBlob, GBL4SeBlob])
+def test_unsigned_content_hash_is_refused(
+    blob_type: type[GBL4MemorySectionBlob | GBL4SeBlob],
+) -> None:
+    """A forged hash in the certificate slot must not vouch for a changed payload.
+
+    An encrypted section is only checked as far as its info tag, and nothing but the
+    content hash covers the SE blob, so the content hash is all that stands in the way.
+    """
+    image = build_image(
+        [APPLICATION],
+        se_blob=bytes(range(256)),
+        encryption=GBL4EncryptionScheme.AES_CCM,
+    )
+    blob = image.get_first_tag(blob_type)
+    tampered = replace_tag(image, blob, blob_type(data=bytes(len(blob.data))))
+    forged = fill_certificate_slot(tampered, [content_hash_of(tampered)])
+
+    assert not tampered.verify_content_hash()
+    assert forged.verify_signature(PRIVATE_KEY.public_key())
+
+    with pytest.raises(ValidationError, match="2 GBL4ContentHash tags"):
+        forged.verify_content_hash()
+
+
+def test_unsigned_update_is_refused(image: GBL4Image) -> None:
+    """An appended section, named by an update forged in the certificate slot."""
+    extra = build_section(BOOTLOADER)
+    grown = GBL4Image(root=GBL4Root(children=[*image.root.children, extra]))
+    update = dataclasses.replace(
+        image.get_first_tag(GBL4UpdateMemorySection),
+        plain_image_size=len(BOOTLOADER),
+        memory_section_position=grown.root_child_offsets()[-1][1],
+        hash=HashValue(
+            hash_type=GBL4HashType.SHA256,
+            value=hashlib.sha256(serialize_tag(extra.info)).digest(),
+        ),
+    )
+    forged = fill_certificate_slot(grown, [content_hash_of(grown), update])
+
+    assert forged.verify_signature(PRIVATE_KEY.public_key())
+
+    with pytest.raises(ValidationError, match="update outside the update process"):
+        forged.verify_memory_sections()
+
+
+def test_signature_comes_from_the_manifest(image: GBL4Image) -> None:
+    """A valid signature copied ahead of the manifest must not stand in for its own."""
+    signature = image.get_first_tag(GBL4Signature)
+    corrupted = replace_tag(
+        image,
+        signature,
+        GBL4Signature(
+            signature=dataclasses.replace(signature.signature, value=bytes(64))
+        ),
+    )
+    moved = GBL4Image(root=GBL4Root(children=[signature, *corrupted.root.children]))
+
+    with pytest.raises(ValidationError, match="2 GBL4Signature tags"):
+        moved.verify_signature(PRIVATE_KEY.public_key())
+
+
+def test_image_has_to_start_with_its_manifest(image: GBL4Image) -> None:
+    shifted = GBL4Image(
+        root=GBL4Root(children=[GBL4Pad(data=bytes(4)), *image.root.children])
+    )
+
+    for check in (
+        shifted.verify_content_hash,
+        shifted.verify_memory_sections,
+        lambda: shifted.verify_signature(PRIVATE_KEY.public_key()),
+    ):
+        with pytest.raises(ValidationError, match="does not start with a manifest"):
+            check()
+
+
+def test_memory_sections_of_an_se_only_image() -> None:
+    """An SE update has no memory section, so there is nothing to compare."""
+    image = build_image([], se_blob=bytes(range(256)))
+
+    assert image.verify_memory_sections()
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [lzma_compress(bytes(1024 * 1024)), b"not an LZMA stream"],
+    ids=["expands past the update size", "corrupt"],
+)
+def test_memory_sections_notice_a_blob_that_does_not_expand(
+    image: GBL4Image, blob: bytes
+) -> None:
+    """The info digest this check reads does not cover the blob, the content hash does."""
+    swapped = replace_tag(
+        image,
+        image.get_first_tag(GBL4MemorySectionBlob),
+        GBL4MemorySectionBlob(data=blob),
+    )
+
+    assert not swapped.verify_memory_sections()
+
+
+def test_plain_image_stops_at_max_size(image: GBL4Image) -> None:
+    section = image.get_first_tag(GBL4MemorySection)
+
+    assert image.plain_image(section, max_size=len(APPLICATION)) == APPLICATION
+
+    with pytest.raises(ValidationError, match="at most 100 bytes"):
+        image.plain_image(section, max_size=100)
 
 
 def test_unsigned_image_raises(image: GBL4Image) -> None:
@@ -514,20 +656,26 @@ def test_memory_sections_notice_a_wrong_final_image_hash(image: GBL4Image) -> No
     ).verify_memory_sections()
 
 
-def test_plain_image_expands_lz4() -> None:
-    section = build_section(APPLICATION, compression=GBL4CompressionScheme.NONE)
+@pytest.mark.parametrize(
+    "plain",
+    [APPLICATION, APPLICATION * 640],
+    # The v4 size field is 24 bits, past the 4 MiB the v3 helper defaults to
+    ids=["8 KiB", "5 MiB"],
+)
+def test_plain_image_expands_lz4(plain: bytes) -> None:
+    section = build_section(plain, compression=GBL4CompressionScheme.NONE)
     packed = dataclasses.replace(
         section,
         children=[
             dataclasses.replace(
                 section.info, compression_scheme=GBL4CompressionScheme.LZ4
             ),
-            GBL4MemorySectionBlob(data=lz4_compress(APPLICATION)),
+            GBL4MemorySectionBlob(data=lz4_compress(plain)),
         ],
     )
     image = build_image([APPLICATION])
 
-    assert image.plain_image(packed) == APPLICATION
+    assert image.plain_image(packed) == plain
 
 
 def test_content_without_a_manifest(image: GBL4Image) -> None:

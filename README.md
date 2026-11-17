@@ -134,14 +134,19 @@ The manifest binds the rest of the file together, and those bindings can be chec
 before flashing anything:
 
 ```python
+assert image.verify_signature(vendor_key)  # the manifest, against a key you trust
 assert image.verify_content_hash()     # the payload after the manifest
 assert image.verify_memory_sections()  # each section against the update that names it
-assert image.verify_signature(vendor_key)  # the manifest, against a key you trust
 ```
 
 `verify_signature` needs the key passed in. The image's own `CERTIFICATE` tag is not
 used, because anyone who edits the manifest can swap the certificate and re-sign.
 Philips Hue images carry no certificate at all.
+
+Check the signature first: the other two checks compare against the content hash and
+the updates in the signed part of the manifest, so they mean little without it. All
+three take their tags from the manifest only, which has to be the first tag, and raise
+`ValidationError` if a second copy of a tag they read appears anywhere in the image.
 
 Sections expand to the image the device flashes:
 
@@ -150,8 +155,9 @@ for section in image.get_tags(GBL4MemorySection):
     print(len(image.plain_image(section)))
 ```
 
-An encrypted section raises `ValidationError`: the key lives in the device, so the blob
-cannot be expanded off-device. `verify_memory_sections` still checks such a section
+Expansion stops at `max_size`, by default 16 MiB, the most an update's 24 bit
+`plain_image_size` can declare. An encrypted section raises `ValidationError`: the key
+lives in the device, so the blob cannot be expanded off-device. `verify_memory_sections` still checks such a section
 against the digest the manifest holds for it.
 
 Reading and writing are supported; building a v4 image from an ELF is not, the ELF

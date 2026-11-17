@@ -12,7 +12,7 @@ import enum
 import hashlib
 from typing import TYPE_CHECKING, Any, Self, Union
 
-from pygbl.compression import lz4_decompress, lzma_decompress
+from pygbl.compression import DECOMPRESSION_ERRORS, lz4_decompress, lzma_decompress
 from pygbl.crypto import load_public_key, verify_digest
 from pygbl.types import ParseError, T, ValidationError
 
@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 # Root tag `0x84A617EB`, from the same `A617EB` family as v3's header but with version
 # byte 0x84 instead of 0x03
 GBL4_MAGIC = b"\xeb\x17\xa6\x84"
+
+# An update's `plain_image_size` is a 24 bit field
+GBL4_MAX_PLAIN_IMAGE_SIZE = 0xFFFFFF
 
 
 class GBL4TagId(enum.IntEnum):
@@ -652,9 +655,47 @@ class GBL4Image:
 
         raise KeyError("Image has no manifest")
 
+    def _manifest(self) -> GBL4Manifest:
+        """The manifest the checks read from, which has to be the image's first tag."""
+        children = self.root.children
+
+        if not children or not isinstance(children[0], GBL4Manifest):
+            raise ValidationError("Image does not start with a manifest")
+
+        return children[0]
+
+    def _signed_children(self) -> list[GBL4TagBase]:
+        """The manifest tags after `SIGNATURE`, or all of them if the image is unsigned."""
+        children = self._manifest().children
+
+        for index, child in enumerate(children):
+            if isinstance(child, GBL4Signature):
+                return children[index + 1 :]
+
+        return children
+
+    def _signed_tag(self, tag_type: type[T]) -> T:
+        """The one tag of a type, which has to sit in the signed part of the manifest.
+
+        The certificate sits before the signature, outside the signed range, so its slot
+        can hold forged tags plus padding without moving anything. A tag is therefore only
+        taken from the signed range, and a second copy anywhere in the image is refused.
+        """
+        tags = self.get_tags(tag_type)
+
+        if len(tags) > 1:
+            raise ValidationError(f"Image has {len(tags)} {tag_type.__name__} tags")
+
+        if not any(child is tags[0] for child in self._signed_children()):
+            raise ValidationError(
+                f"{tag_type.__name__} is outside the signed part of the manifest"
+            )
+
+        return tags[0]
+
     def verify_content_hash(self) -> bool:
         """Whether the payload following the manifest hashes to `CONTENT_HASH`."""
-        return self.get_first_tag(GBL4ContentHash).hash.matches(self.content())
+        return self._signed_tag(GBL4ContentHash).hash.matches(self.content())
 
     def verify_memory_sections(self) -> bool:
         """Whether every update in the manifest matches the section it points at.
@@ -663,8 +704,20 @@ class GBL4Image:
         tag, header included, which in turn carries the digest of the image the section
         expands to. The second half can only be checked when the section is one this
         library can expand, so an encrypted section is verified as far as its info tag.
+        A section that does not expand to the update's `plain_image_size`, or that uses a
+        compression scheme this library does not know, fails.
         """
-        for update in self.get_tags(GBL4UpdateMemorySection):
+        process = self._signed_tag(GBL4UpdateProcess)
+        updates = [
+            c for c in process.children if isinstance(c, GBL4UpdateMemorySection)
+        ]
+
+        if len(self.get_tags(GBL4UpdateMemorySection, allow_missing=True)) != len(
+            updates
+        ):
+            raise ValidationError("Image has an update outside the update process")
+
+        for update in updates:
             try:
                 section = self.memory_section_at(update.memory_section_position)
             except KeyError:
@@ -676,7 +729,10 @@ class GBL4Image:
             if section.info.encryption_scheme != GBL4EncryptionScheme.NONE:
                 continue
 
-            plain = self.plain_image(section)
+            try:
+                plain = self.plain_image(section, max_size=update.plain_image_size)
+            except ValidationError:
+                return False
 
             if len(plain) != update.plain_image_size:
                 return False
@@ -687,8 +743,14 @@ class GBL4Image:
 
         return True
 
-    def plain_image(self, section: GBL4MemorySection) -> bytes:
-        """Expand a memory section into the image the device will flash."""
+    def plain_image(
+        self, section: GBL4MemorySection, *, max_size: int = GBL4_MAX_PLAIN_IMAGE_SIZE
+    ) -> bytes:
+        """Expand a memory section into the image the device will flash.
+
+        Decompression stops at `max_size`, so a small blob cannot expand without bound.
+        The default is the largest size an update's 24 bit `plain_image_size` can give.
+        """
         info = section.info
 
         if info.encryption_scheme != GBL4EncryptionScheme.NONE:
@@ -702,15 +764,23 @@ class GBL4Image:
         if info.compression_scheme == GBL4CompressionScheme.NONE:
             return data
 
-        if info.compression_scheme == GBL4CompressionScheme.LZMA:
-            return lzma_decompress(data)
+        if info.compression_scheme not in (
+            GBL4CompressionScheme.LZMA,
+            GBL4CompressionScheme.LZ4,
+        ):
+            raise ValidationError(
+                f"Unsupported compression scheme {info.compression_scheme:#x}"
+            )
 
-        if info.compression_scheme == GBL4CompressionScheme.LZ4:
-            return lz4_decompress(data)
+        try:
+            if info.compression_scheme == GBL4CompressionScheme.LZMA:
+                return lzma_decompress(data, max_size=max_size)
 
-        raise ValidationError(
-            f"Unsupported compression scheme {info.compression_scheme:#x}"
-        )
+            return lz4_decompress(data, max_size=max_size)
+        except DECOMPRESSION_ERRORS as exc:
+            raise ValidationError(
+                f"Memory section does not expand to at most {max_size} bytes: {exc}"
+            ) from exc
 
     def signing_content(self) -> bytes:
         """The manifest tags an `ECDSA_P256` signature covers.
@@ -719,8 +789,7 @@ class GBL4Image:
         info, the bundle version, the content hash and the update process. The
         certificate sits before the signature and is not part of the signed range.
         """
-        manifest = self.get_first_tag(GBL4Manifest)
-        children = manifest.children
+        children = self._manifest().children
 
         for index, child in enumerate(children):
             if isinstance(child, GBL4Signature):
@@ -742,6 +811,13 @@ class GBL4Image:
 
         if not signatures:
             raise KeyError("Image is not signed")
+
+        if len(signatures) > 1:
+            raise ValidationError(f"Image has {len(signatures)} GBL4Signature tags")
+
+        # Only the manifest's own signature matches the range `signing_content` covers
+        if not any(child is signatures[0] for child in self._manifest().children):
+            raise ValidationError("GBL4Signature is outside the manifest")
 
         signature = signatures[0].signature
 

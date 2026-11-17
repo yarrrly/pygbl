@@ -11,6 +11,12 @@ except ImportError:
 else:
     HAVE_LZ4 = True
 
+# What a corrupt stream, or one larger than the output limit, raises
+DECOMPRESSION_ERRORS: tuple[type[Exception], ...] = (lzma.LZMAError, ValidationError)
+
+if HAVE_LZ4:
+    DECOMPRESSION_ERRORS += (lz4.block.LZ4BlockError,)
+
 LZMA_LC = 1
 LZMA_LP = 1
 LZMA_PB = 2
@@ -103,8 +109,21 @@ def lzma_compress(data: bytes, **kwargs: int) -> bytes:
     return container
 
 
-def lzma_decompress(data: bytes) -> bytes:
-    return lzma.decompress(data, format=lzma.FORMAT_ALONE)
+def lzma_decompress(data: bytes, *, max_size: int | None = None) -> bytes:
+    if max_size is None:
+        return lzma.decompress(data, format=lzma.FORMAT_ALONE)
+
+    decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
+    # One byte past the limit is enough to tell that the stream is too large
+    data = decompressor.decompress(data, max_length=max_size + 1)
+
+    if len(data) > max_size:
+        raise ValidationError(f"LZMA stream expands to more than {max_size} bytes")
+
+    if not decompressor.eof:
+        raise ValidationError("LZMA stream ends before its end marker")
+
+    return data
 
 
 def require_lz4() -> None:
